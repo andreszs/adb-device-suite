@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#ffffff" />
+    <title>ADB Device Suite</title>
+    <script>
+      (() => {
+        const storageKey = "adb-device-suite:theme";
+        const query = new URLSearchParams(window.location.search);
+        const requested = query.get("theme");
+        const platform = query.get("platform");
+        let preference = requested === "dark" || requested === "auto" ? requested : "light";
+        try {
+          if (!requested) {
+            const stored = window.localStorage.getItem(storageKey);
+            if (stored === "dark" || stored === "auto") preference = stored;
+          }
+        } catch {
+          // Keep the first-run light theme when browser storage is unavailable.
+        }
+        const resolved = preference === "auto"
+          ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+          : preference;
+        document.documentElement.dataset.theme = resolved;
+        document.documentElement.dataset.themePreference = preference;
+        document.documentElement.dataset.platform = platform === "darwin" || platform === "win32"
+          ? platform
+          : "other";
+        document.documentElement.style.colorScheme = resolved;
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

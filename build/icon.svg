@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="96 136 832 832">
+  <title>ADB Device Suite</title>
+  <g fill="none" stroke="#3DDC84" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M366 294Q512 168 658 294" stroke-width="62"/>
+    <path d="M421 407Q512 329 603 407" stroke-width="62"/>
+    <path d="M350 541 276 411M674 541l74-130" stroke-width="68"/>
+  </g>
+  <path
+    d="M144 872A368 368 0 0 1 880 872Q880 904 848 904H176Q144 904 144 872ZM386 735a48 48 0 1 0 96 0 48 48 0 1 0-96 0ZM542 735a48 48 0 1 0 96 0 48 48 0 1 0-96 0Z"
+    fill="#3DDC84"
+    fill-rule="evenodd"
+  />
+</svg>

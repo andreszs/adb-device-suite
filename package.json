@@ -1,0 +1,116 @@
+{
+  "name": "adb-device-suite",
+  "version": "0.1.0",
+  "description": "A cross-platform desktop toolkit for managing Android devices over ADB.",
+  "author": "Andrés Zsögön",
+  "license": "MIT",
+  "main": "electron/main.cjs",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "build": "tsc --noEmit && vite build",
+    "test": "node --test",
+    "dist": "npm run build && electron-builder",
+    "dist:win": "npm run build && electron-builder --win nsis",
+    "dist:store": "npm run build && electron-builder --win appx --x64 --publish never --config.directories.output=release-store",
+    "dist:mac": "npm run build && electron-builder --mac dmg",
+    "icons": "node scripts/generate-icons.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@vitejs/plugin-react": "^6.1.2",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "electron": "^45.0.0",
+    "electron-builder": "^26.18.0",
+    "i18next": "^26.5.7",
+    "png-to-ico": "^3.0.2",
+    "png2icons": "^2.0.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-i18next": "^17.1.5",
+    "react-icons": "^5.7.0",
+    "sharp": "^0.35.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "wait-on": "^9.0.1"
+  },
+  "build": {
+    "appId": "com.andreszs.adbdevicesuite",
+    "productName": "ADB Device Suite",
+    "asar": true,
+    "compression": "maximum",
+    "electronLanguages": [
+      "en-US",
+      "de",
+      "es",
+      "es-419",
+      "fr",
+      "hi",
+      "ja",
+      "ko",
+      "pt-BR",
+      "ru",
+      "zh-CN",
+      "zh-TW"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "artifactName": "ADB-Device-Suite-${version}-${os}-${arch}.${ext}",
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "appx": {
+      "applicationId": "ADBDeviceSuite",
+      "identityName": "54658Argim.net.ADBDeviceSuite",
+      "publisher": "CN=58D9E03E-1268-4BEF-AD21-E1176E96955F",
+      "publisherDisplayName": "Argim.net",
+      "displayName": "ADB Device Suite",
+      "backgroundColor": "transparent",
+      "showNameOnTiles": false,
+      "minVersion": "10.0.17763.0",
+      "languages": [
+        "en-US",
+        "de-DE",
+        "es-ES",
+        "fr-FR",
+        "hi-IN",
+        "ja-JP",
+        "ko-KR",
+        "pt-BR",
+        "ru-RU",
+        "zh-CN",
+        "zh-TW"
+      ],
+      "capabilities": [
+        "runFullTrust",
+        "internetClient",
+        "privateNetworkClientServer"
+      ]
+    },
+    "mac": {
+      "icon": "build/icon.icns",
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.developer-tools"
+    }
+  }
+}
