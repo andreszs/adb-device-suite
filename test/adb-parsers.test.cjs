@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
+  AdbService,
   parseDevices,
   parseIpAddress,
   parseIpAddresses,
@@ -86,4 +87,51 @@ test("validateEndpoint normalizes safe endpoints and rejects invalid ports", () 
   assert.equal(validateEndpoint("adb-device.local:37123"), "adb-device.local:37123");
   assert.throws(() => validateEndpoint("192.168.1.2"), /format/);
   assert.throws(() => validateEndpoint("192.168.1.2:99999"), /between/);
+});
+
+test("pairByQr waits for the requested QR service and pairs with its generated secret", async () => {
+  const adb = new AdbService();
+  const calls = [];
+  const progress = [];
+  let paired = false;
+  adb.run = async (args) => {
+    calls.push(args);
+    if (args[0] === "mdns") {
+      return {
+        stdout: paired
+          ? `List of discovered mdns services
+adb-R5CT123456-random _adb-tls-connect._tcp 192.168.1.41:41521`
+          : `List of discovered mdns services
+studio-other _adb-tls-pairing._tcp 192.168.1.40:37121
+studio-0123456789 _adb-tls-pairing._tcp 192.168.1.41:37123`,
+        stderr: "",
+      };
+    }
+    if (args[0] === "pair") {
+      paired = true;
+      return { stdout: "Successfully paired to 192.168.1.41:37123", stderr: "" };
+    }
+    if (args[0] === "devices") return { stdout: "List of devices attached", stderr: "" };
+    if (args[0] === "connect") return { stdout: "connected to 192.168.1.41:41521", stderr: "" };
+    return { stdout: "", stderr: "" };
+  };
+
+  const result = await adb.pairByQr("studio-0123456789", "0123456789abcdef0123", {
+    timeout: 100,
+    onPaired: (event) => progress.push({ ...event, calls: calls.length }),
+  });
+
+  assert.equal(result.pairingEndpoint, "192.168.1.41:37123");
+  assert.equal(result.endpoint, "192.168.1.41:41521");
+  assert.deepEqual(progress, [{ endpoint: "192.168.1.41:37123", calls: 2 }]);
+  assert.deepEqual(calls.at(-1), ["connect", "192.168.1.41:41521"]);
+});
+
+test("pairByQr rejects malformed credentials before running ADB", async () => {
+  const adb = new AdbService();
+  adb.run = async () => assert.fail("ADB should not run for invalid QR credentials");
+  await assert.rejects(
+    adb.pairByQr("not-a-studio-service", "short"),
+    /Invalid QR pairing credentials/,
+  );
 });

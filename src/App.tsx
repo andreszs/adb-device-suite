@@ -1,4 +1,5 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { QRCodeSVG } from "qrcode.react";
 import {
   MdBrightnessAuto,
   MdCheckCircle,
@@ -32,6 +33,7 @@ const EMPTY_SNAPSHOT: AdbSnapshot = {
 const EMPTY_SETTINGS: AppSettings = { adbPath: null, autoReconnect: true, deviceAliases: {}, savedConnections: [], themePreference: "light", languagePreference: "system" };
 
 type ModalMode = "connect" | "pair" | null;
+type PairMethod = "code" | "qr";
 type Toast = { type: "success" | "error"; message: string } | null;
 type ResolvedTheme = "light" | "dark";
 type ThemePreference = ResolvedTheme | "auto";
@@ -113,6 +115,9 @@ function friendlyError(error: unknown, t: TFunction) {
     "Authorize USB debugging on the device.": "errors.authorize",
     "Could not determine the Wi-Fi address.": "errors.noWifiAddress",
     "The selected file is not a working ADB executable.": "errors.invalidAdb",
+    "Invalid QR pairing credentials.": "errors.invalidQr",
+    "No Android device responded to the QR code before it expired.": "errors.qrTimeout",
+    "Pairing succeeded, but ADB could not connect to the wireless debugging port within 20 seconds.": "errors.qrConnectTimeout",
     "A valid device identifier is required.": "errors.invalidAlias",
     "The alias must be text.": "errors.aliasText",
     "Aliases can contain up to 32 characters.": "errors.aliasLong",
@@ -142,6 +147,21 @@ function actionMessage(key: string, result: ActionResult, t: TFunction) {
   if (key === "modal:pair") return t("status.paired");
   if (key === "modal:connect") return t("status.connectedTo", { endpoint: result.endpoint || "ADB" });
   return result.message;
+}
+
+function randomHex(bytes: number) {
+  const values = crypto.getRandomValues(new Uint8Array(bytes));
+  return [...values].map((value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+function createQrPairingCredentials() {
+  const serviceName = `studio-${randomHex(5)}`;
+  const password = randomHex(10);
+  return {
+    serviceName,
+    password,
+    payload: `WIFI:T:ADB;S:${serviceName};P:${password};;`,
+  };
 }
 
 function groupDevices(devices: AdbDevice[]): DeviceGroup[] {
@@ -177,6 +197,7 @@ function DeviceCard({
   alias,
   busy,
   group,
+  onConnect,
   onEnableWireless,
   onDisconnect,
   onSetAlias,
@@ -184,6 +205,7 @@ function DeviceCard({
   alias: string | null;
   busy: string | null;
   group: DeviceGroup;
+  onConnect: (device: AdbDevice) => void;
   onEnableWireless: (serial: string) => void;
   onDisconnect: (device: AdbDevice) => void;
   onSetAlias: (identifier: string, alias: string) => Promise<boolean>;
@@ -191,6 +213,7 @@ function DeviceCard({
   const { t } = useTranslation();
   const { devices, identifier, primary, usb, wifi } = group;
   const ready = devices.some((device) => device.state === "device");
+  const wifiConnected = wifi?.state === "device";
   const statusDevice = devices.find((device) => device.state === "device")
     || devices.find((device) => device.state === "unauthorized")
     || devices[0];
@@ -269,7 +292,7 @@ function DeviceCard({
         </div>
       </div>
       <div className="device-actions">
-        {wifi ? (
+        {wifiConnected && wifi ? (
           <button
             className="button ghost-danger"
             disabled={busy !== null}
@@ -278,6 +301,25 @@ function DeviceCard({
           >
             {t("device.disconnect")}
           </button>
+        ) : wifi ? (
+          <>
+            <button
+              className="button secondary"
+              disabled={busy !== null}
+              onClick={() => onConnect(wifi)}
+              title={t("device.reconnectOfflineTooltip", { name: alias || modelName })}
+            >
+              {busy === `connect:${wifi.serial}` ? t("device.connecting") : t("device.reconnectOffline")}
+            </button>
+            <button
+              className="button ghost-danger"
+              disabled={busy !== null}
+              onClick={() => onDisconnect(wifi)}
+              title={t("device.removeOfflineTooltip", { name: alias || modelName })}
+            >
+              {t("device.removeOffline")}
+            </button>
+          </>
         ) : usb ? (
           <button
             className="button secondary has-icon"
@@ -298,34 +340,137 @@ function ConnectionModal({
   initialEndpoint,
   busy,
   onClose,
+  onCancelQrPair,
+  onQrPair,
   onSubmit,
 }: {
   mode: Exclude<ModalMode, null>;
   initialEndpoint: string;
   busy: boolean;
   onClose: () => void;
+  onCancelQrPair: () => Promise<void>;
+  onQrPair: (serviceName: string, password: string) => Promise<void>;
   onSubmit: (endpoint: string, code?: string) => void;
 }) {
   const { t } = useTranslation();
   const [endpoint, setEndpoint] = useState(initialEndpoint);
   const [code, setCode] = useState("");
+  const [pairMethod, setPairMethod] = useState<PairMethod>("code");
+  const [qrCredentials, setQrCredentials] = useState(createQrPairingCredentials);
+  const [qrStatus, setQrStatus] = useState<"idle" | "waiting" | "connecting" | "error">("idle");
+  const [qrPaired, setQrPaired] = useState(false);
+  const [qrError, setQrError] = useState("");
+  const qrAttempt = useRef(0);
+
+  useEffect(() => window.adbSuite.onQrPairingProgress((progress) => {
+    if (progress.phase !== "connecting") return;
+    setQrPaired(true);
+    setQrStatus("connecting");
+  }), []);
 
   function submit(event: FormEvent) {
     event.preventDefault();
     onSubmit(endpoint.trim(), mode === "pair" ? code.trim() : undefined);
   }
 
+  async function beginQrPairing() {
+    const attempt = ++qrAttempt.current;
+    const credentials = createQrPairingCredentials();
+    setQrCredentials(credentials);
+    setQrPaired(false);
+    setQrError("");
+    setQrStatus("waiting");
+    try {
+      await onQrPair(credentials.serviceName, credentials.password);
+    } catch (error) {
+      if (qrAttempt.current !== attempt) return;
+      setQrError(friendlyError(error, t));
+      setQrStatus("error");
+    }
+  }
+
+  function changePairMethod(nextMethod: PairMethod) {
+    if (nextMethod === pairMethod) return;
+    qrAttempt.current += 1;
+    if (qrStatus === "waiting" || qrStatus === "connecting") void onCancelQrPair();
+    setPairMethod(nextMethod);
+    setQrStatus("idle");
+    setQrPaired(false);
+    setQrError("");
+    if (nextMethod === "qr") void beginQrPairing();
+  }
+
+  function closeModal() {
+    qrAttempt.current += 1;
+    if (qrStatus === "waiting" || qrStatus === "connecting") void onCancelQrPair();
+    onClose();
+  }
+
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+    <div className="modal-backdrop" role="presentation" onMouseDown={closeModal}>
       <section className="modal" aria-modal="true" role="dialog" onMouseDown={(event) => event.stopPropagation()}>
         <div className="modal-header">
           <div>
             <span className="eyebrow">{t("connection.wirelessDebugging")}</span>
             <h2>{mode === "pair" ? t("connection.pairDevice") : t("connection.connectManually")}</h2>
           </div>
-          <button aria-label={t("common.close")} className="icon-button" onClick={onClose} title={t("connection.closeDialog")}><Icons.Close /></button>
+          <button aria-label={t("common.close")} className="icon-button" onClick={closeModal} title={t("connection.closeDialog")}><Icons.Close /></button>
         </div>
-        <form onSubmit={submit}>
+
+        {mode === "pair" && (
+          <div aria-label={t("connection.pairMethod")} className="pair-method-tabs" role="tablist">
+            <button
+              aria-selected={pairMethod === "code"}
+              className={pairMethod === "code" ? "active" : ""}
+              onClick={() => changePairMethod("code")}
+              role="tab"
+              title={t("connection.codeTooltip")}
+              type="button"
+            >{t("connection.codeTab")}</button>
+            <button
+              aria-selected={pairMethod === "qr"}
+              className={pairMethod === "qr" ? "active" : ""}
+              onClick={() => changePairMethod("qr")}
+              role="tab"
+              title={t("connection.qrTooltip")}
+              type="button"
+            >{t("connection.qrTab")}</button>
+          </div>
+        )}
+
+        {mode === "pair" && pairMethod === "qr" ? (
+          <div className="qr-pairing-panel">
+            <div className={`qr-code-frame${qrStatus === "error" ? " expired" : qrStatus === "connecting" ? " paired" : ""}`}>
+              {qrStatus === "error" ? (
+                <div className="qr-expired-state">
+                  <Icons.Error />
+                  <strong>{t(qrPaired ? "connection.qrConnectionFailed" : "connection.qrExpired")}</strong>
+                </div>
+              ) : qrStatus === "connecting" ? (
+                <div className="qr-paired-state">
+                  <Icons.Success />
+                  <strong>{t("connection.qrPaired")}</strong>
+                </div>
+              ) : (
+                <QRCodeSVG bgColor="#ffffff" fgColor="#111827" level="M" marginSize={2} size={216} value={qrCredentials.payload} />
+              )}
+            </div>
+            <strong>{t(qrPaired ? "connection.qrPairedTitle" : "connection.qrTitle")}</strong>
+            <p className="form-help">{t(qrPaired ? "connection.qrConnectingHelp" : "connection.qrHelp")}</p>
+            <p aria-live="polite" className={`qr-status ${qrStatus}`}>
+              {qrStatus === "error"
+                ? qrError
+                : t(qrStatus === "connecting" ? "connection.qrConnecting" : "connection.qrWaiting")}
+            </p>
+            <div className="modal-actions">
+              <button className="button text" onClick={closeModal} title={t("connection.cancelTooltip")} type="button">{t("common.cancel")}</button>
+              {qrStatus === "error" && !qrPaired && (
+                <button className="button primary" onClick={() => void beginQrPairing()} title={t("connection.qrRetryTooltip")} type="button">{t("connection.qrRetry")}</button>
+              )}
+            </div>
+          </div>
+        ) : (
+          <form onSubmit={submit}>
           <label>
             {t("connection.endpoint")}
             <input
@@ -357,12 +502,13 @@ function ConnectionModal({
               : t("connection.connectHelp")}
           </p>
           <div className="modal-actions">
-            <button className="button text" onClick={onClose} title={t("connection.cancelTooltip")} type="button">{t("common.cancel")}</button>
+            <button className="button text" onClick={closeModal} title={t("connection.cancelTooltip")} type="button">{t("common.cancel")}</button>
             <button className="button primary" disabled={busy} title={mode === "pair" ? t("connection.pairTooltip") : t("connection.connectTooltip")} type="submit">
               {busy ? t("common.working") : mode === "pair" ? t("connection.pairButton") : t("common.connect")}
             </button>
           </div>
-        </form>
+          </form>
+        )}
       </section>
     </div>
   );
@@ -630,6 +776,13 @@ export default function App() {
     setModal(mode);
   }
 
+  async function pairByQr(serviceName: string, password: string) {
+    await window.adbSuite.pairByQr(serviceName, password);
+    setToast({ type: "success", message: t("status.paired") });
+    setModal(null);
+    await refresh();
+  }
+
   async function chooseAdb() {
     setBusy("choose-adb");
     try {
@@ -821,6 +974,7 @@ export default function App() {
                       busy={busy}
                       group={group}
                       key={group.key}
+                      onConnect={(target) => action(`connect:${target.serial}`, () => window.adbSuite.connect(target.serial))}
                       onDisconnect={(target) => {
                         const saved = settings.savedConnections.find((connection) => (
                           connection.endpoint === target.serial
@@ -953,7 +1107,9 @@ export default function App() {
           initialEndpoint={modalEndpoint}
           key={`${modal}:${modalEndpoint}`}
           mode={modal}
+          onCancelQrPair={() => window.adbSuite.cancelQrPairing()}
           onClose={() => setModal(null)}
+          onQrPair={pairByQr}
           onSubmit={(endpoint, code) => action(`modal:${modal}`, () => modal === "pair"
             ? window.adbSuite.pair(endpoint, code || "")
             : window.adbSuite.connect(endpoint))}

@@ -235,7 +235,7 @@ h1, h2, h3, p { margin-top: 0; }
 .device-details { min-width: 0; gap: 7px; overflow: hidden; color: var(--muted); font-size: 12px; line-height: 1.25; white-space: nowrap; }
 .device-details i { width: 3px; height: 3px; background: var(--detail-dot); border-radius: 50%; }
 .device-id { min-width: 0; overflow: hidden; color: var(--device-id); font: 12px/1.25 "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace; text-overflow: ellipsis; }
-.device-actions { padding-left: 10px; }
+.device-actions { display: flex; align-items: center; gap: 7px; padding-left: 10px; }
 
 .empty-state { min-height: 270px; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 1px dashed var(--line-strong); border-radius: 16px; background: var(--empty-bg); }
 .empty-rings { width: 68px; height: 68px; margin-bottom: 20px; display: grid; place-items: center; color: var(--device-icon); border: 1px solid var(--device-icon-border); border-radius: 50%; background: var(--device-icon-a); box-shadow: 0 0 0 10px var(--device-icon-b); }
@@ -310,6 +310,24 @@ footer { width: 100%; min-height: 32px; margin: 0; padding: 0; display: grid; gr
 .modal input:focus { border-color: #6f8cff; box-shadow: 0 0 0 3px rgba(111,140,255,.1); }
 .form-help { margin: 2px 0 22px; color: var(--muted); font-size: 10px; line-height: 1.6; }
 .modal-actions { justify-content: flex-end; gap: 8px; }
+.pair-method-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin: -5px 0 18px; padding: 4px; border-radius: 11px; background: var(--surface-2); }
+.pair-method-tabs button { min-height: 36px; padding: 0 12px; color: var(--muted); border: 0; border-radius: 8px; background: transparent; font: 600 12px/1 "Segoe UI", system-ui, sans-serif; cursor: pointer; }
+.pair-method-tabs button:hover { color: var(--text); }
+.pair-method-tabs button.active { color: var(--accent); background: var(--modal-bg); box-shadow: 0 1px 4px rgba(24, 34, 52, .12); }
+.qr-pairing-panel { text-align: center; }
+.qr-code-frame { width: 232px; height: 232px; display: grid; place-items: center; margin: 0 auto 13px; border: 1px solid var(--line-strong); border-radius: 14px; background: #fff; box-shadow: 0 2px 8px rgba(24, 34, 52, .10); }
+.qr-code-frame.expired { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 28%, var(--line-strong)); background: color-mix(in srgb, var(--danger) 6%, #fff); }
+.qr-code-frame.paired { color: var(--mint); border-color: color-mix(in srgb, var(--mint) 38%, var(--line-strong)); background: color-mix(in srgb, var(--mint) 8%, #fff); }
+.qr-expired-state { display: grid; justify-items: center; gap: 10px; padding: 20px; text-align: center; }
+.qr-paired-state { display: grid; justify-items: center; gap: 10px; padding: 20px; text-align: center; }
+.qr-expired-state .ui-icon, .qr-paired-state .ui-icon { width: 38px; height: 38px; }
+.qr-expired-state strong, .qr-paired-state strong { font-size: 13px; }
+.qr-pairing-panel > strong { display: block; margin-bottom: 5px; font-size: 13px; }
+.qr-pairing-panel .form-help { max-width: 390px; margin: 0 auto 10px; }
+.qr-status { min-height: 34px; display: flex; align-items: center; justify-content: center; margin: 0 0 14px; padding: 7px 10px; color: var(--muted); border-radius: 8px; background: var(--surface-2); font-size: 11px; line-height: 1.35; }
+.qr-status.waiting::before { width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: var(--mint); box-shadow: 0 0 0 4px var(--mint-a); content: ""; animation: pulse 1.5s ease-in-out infinite; }
+.qr-status.connecting::before { width: 13px; height: 13px; margin-right: 8px; border: 2px solid color-mix(in srgb, var(--mint) 20%, transparent); border-top-color: var(--mint); border-radius: 50%; content: ""; animation: spin .8s linear infinite; }
+.qr-status.error { color: var(--danger); background: var(--danger-a); }
 
 .settings-modal { width: min(540px, 100%); padding: 20px; font-size: 12px; }
 .settings-modal .eyebrow { font-size: 10px; }

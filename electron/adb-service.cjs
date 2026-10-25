@@ -142,6 +142,35 @@ function validateEndpoint(endpoint) {
   return normalized;
 }
 
+function validateQrPairingCredentials(serviceName, password) {
+  if (typeof serviceName !== "string" || !/^studio-[a-zA-Z0-9]{10,32}$/.test(serviceName)) {
+    throw new Error("Invalid QR pairing credentials.");
+  }
+  if (typeof password !== "string" || !/^[a-zA-Z0-9]{16,64}$/.test(password)) {
+    throw new Error("Invalid QR pairing credentials.");
+  }
+  return { serviceName, password };
+}
+
+function endpointHost(endpoint) {
+  const match = String(endpoint || "").match(/^\[?([^\]]+?)]?:\d+$/);
+  return match?.[1] || null;
+}
+
+function waitForDelay(delay, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error("QR pairing was cancelled."));
+      return;
+    }
+    const timer = setTimeout(resolve, delay);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(new Error("QR pairing was cancelled."));
+    }, { once: true });
+  });
+}
+
 class AdbService {
   constructor(customPath = null) {
     this.customPath = customPath;
@@ -311,14 +340,79 @@ class AdbService {
     return { endpoint, message: stdout || stderr || `Disconnected from ${endpoint}` };
   }
 
-  async pair(rawEndpoint, pairingCode) {
+  async #pairWithSecret(rawEndpoint, pairingSecret) {
     const endpoint = validateEndpoint(rawEndpoint);
-    const code = String(pairingCode || "").trim();
-    if (!/^\d{6}$/.test(code)) throw new Error("The pairing code must contain 6 digits.");
-    const { stdout, stderr } = await this.run(["pair", endpoint, code], 20_000);
+    const secret = String(pairingSecret || "").trim();
+    const { stdout, stderr } = await this.run(["pair", endpoint, secret], 20_000);
     const output = stdout || stderr;
     if (!/successfully paired/i.test(output)) throw new Error(output || "Pairing failed.");
     return { endpoint, message: output };
+  }
+
+  async pair(rawEndpoint, pairingCode) {
+    const code = String(pairingCode || "").trim();
+    if (!/^\d{6}$/.test(code)) throw new Error("The pairing code must contain 6 digits.");
+    return this.#pairWithSecret(rawEndpoint, code);
+  }
+
+  async pairByQr(rawServiceName, rawPassword, options = {}) {
+    const { signal, timeout = 120_000 } = options;
+    const { serviceName, password } = validateQrPairingCredentials(rawServiceName, rawPassword);
+    const deadline = Date.now() + timeout;
+
+    while (Date.now() < deadline) {
+      if (signal?.aborted) throw new Error("QR pairing was cancelled.");
+      const { stdout } = await this.run(["mdns", "services"], 5_000);
+      const service = parseMdnsServices(stdout).find((item) => (
+        item.type === "pairing" && item.serviceName === serviceName
+      ));
+      if (service) {
+        const pairingResult = await this.#pairWithSecret(service.endpoint, password);
+        options.onPaired?.({ endpoint: pairingResult.endpoint });
+        const connectionResult = await this.#connectAfterPairing(service.endpoint, signal);
+        return {
+          ...connectionResult,
+          pairingEndpoint: pairingResult.endpoint,
+          message: `${pairingResult.message} ${connectionResult.message}`.trim(),
+        };
+      }
+      await waitForDelay(Math.min(1_000, deadline - Date.now()), signal);
+    }
+
+    throw new Error("No Android device responded to the QR code before it expired.");
+  }
+
+  async #connectAfterPairing(pairingEndpoint, signal, timeout = 20_000) {
+    const host = endpointHost(pairingEndpoint);
+    const deadline = Date.now() + timeout;
+
+    while (Date.now() < deadline) {
+      if (signal?.aborted) throw new Error("QR pairing was cancelled.");
+      const [{ stdout: devicesOutput }, mdnsResult] = await Promise.all([
+        this.run(["devices", "-l"], 8_000),
+        this.run(["mdns", "services"], 5_000).catch(() => ({ stdout: "" })),
+      ]);
+      const connectedDevice = parseDevices(devicesOutput).find((device) => (
+        device.connection === "wifi" && endpointHost(device.serial) === host && device.state === "device"
+      ));
+      if (connectedDevice) {
+        return { endpoint: connectedDevice.serial, message: `Connected to ${connectedDevice.serial}` };
+      }
+
+      const connectionService = parseMdnsServices(mdnsResult.stdout).find((item) => (
+        item.type === "connect" && endpointHost(item.endpoint) === host
+      ));
+      if (connectionService) {
+        try {
+          return await this.connect(connectionService.endpoint);
+        } catch {
+          // Keep retrying until the connection deadline.
+        }
+      }
+      await waitForDelay(Math.min(750, deadline - Date.now()), signal);
+    }
+
+    throw new Error("Pairing succeeded, but ADB could not connect to the wireless debugging port within 20 seconds.");
   }
 
   async enableWireless(serial) {

@@ -112,5 +112,8 @@
       ],
       "category": "public.app-category.developer-tools"
     }
+  },
+  "dependencies": {
+    "qrcode.react": "^4.2.0"
   }
 }

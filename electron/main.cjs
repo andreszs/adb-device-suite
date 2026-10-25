@@ -16,6 +16,7 @@ let store;
 let reconnectManager;
 let pollTimer;
 let pollRunning = false;
+let qrPairingController = null;
 
 function createWindow() {
   const savedSettings = store.get();
@@ -26,9 +27,9 @@ function createWindow() {
     || (themePreference === "auto" && nativeTheme.shouldUseDarkColors);
   mainWindow = new BrowserWindow({
     width: 900,
-    height: 620,
+    height: 660,
     minWidth: 900,
-    minHeight: 620,
+    minHeight: 660,
     show: false,
     backgroundColor: useDarkTheme ? "#070b14" : "#f4f7fb",
     title: "ADB Device Suite",
@@ -140,6 +141,33 @@ function registerIpc() {
     const result = await adbService.pair(endpoint, code);
     await pollDevices();
     return result;
+  });
+
+  ipcMain.handle("adb:pair-qr", async (event, { serviceName, password }) => {
+    qrPairingController?.abort();
+    const controller = new AbortController();
+    qrPairingController = controller;
+    try {
+      const result = await adbService.pairByQr(serviceName, password, {
+        signal: controller.signal,
+        onPaired: ({ endpoint }) => event.sender.send("adb:qr-pairing-progress", {
+          phase: "connecting",
+          pairingEndpoint: endpoint,
+          connectionTimeoutSeconds: 20,
+        }),
+      });
+      const snapshot = await adbService.snapshot();
+      rememberFromSnapshot(result.endpoint, snapshot, { mode: "tls" });
+      sendSnapshot(snapshot);
+      return { ...result, settings: currentSettings() };
+    } finally {
+      if (qrPairingController === controller) qrPairingController = null;
+    }
+  });
+
+  ipcMain.handle("adb:cancel-pair-qr", () => {
+    qrPairingController?.abort();
+    qrPairingController = null;
   });
 
   ipcMain.handle("adb:enable-wireless", async (_event, serial) => {
@@ -257,5 +285,6 @@ app.whenReady().then(() => {
 
 app.on("window-all-closed", () => {
   if (pollTimer) clearInterval(pollTimer);
+  qrPairingController?.abort();
   if (process.platform !== "darwin") app.quit();
 });
