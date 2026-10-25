@@ -4,6 +4,30 @@ All notable changes to ADB Device Suite will be documented in this file.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-25
+
+### Added
+
+- Android 11+ wireless pairing through scannable QR codes with temporary credentials.
+- Explicit pairing and connection progress states, including a connection activity indicator and timeout feedback.
+- Localized QR pairing messages across every supported application language.
+
+### Changed
+
+- QR pairing now continues from successful authentication to the separate ADB wireless connection step before reporting completion.
+- The QR code expires after 120 seconds, and the post-pairing connection attempt stops after 20 seconds.
+- The minimum window height is increased to 660 px so the QR dialog fits with balanced vertical margins.
+- Offline wireless transports are presented as saved connections with separate reconnect and remove actions.
+- The device-list heading now describes all ADB transports instead of implying that every listed transport is connected.
+
+### Fixed
+
+- Expired QR codes are removed instead of remaining visible and scannable after their pairing service has stopped.
+- A successful QR pairing no longer closes the dialog before ADB has attempted to connect to the device.
+- Offline devices no longer display a misleading Disconnect Wi-Fi action.
+
+## [0.1.0] - 2026-10-24
+
 ### Added
 
 - Initial Electron and React desktop application.
