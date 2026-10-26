@@ -4,6 +4,20 @@ All notable changes to ADB Device Suite will be documented in this file.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-26
+
+### Changed
+
+- Pairing by six-digit code now continues through discovery and connection of the final ADB TLS endpoint before reporting success.
+- The pairing dialog remains open with explicit paired-and-connecting feedback until the device is connected or the 20-second timeout expires.
+- Pairing, connection and method controls remain disabled while a wireless pairing operation is active.
+
+### Fixed
+
+- A second pairing operation can no longer start while another pairing or post-pairing connection is still in progress.
+- Pairing-code users are no longer returned to an actionable Nearby pairing entry while ADB is still establishing the final connection.
+- Abort listeners used while polling mDNS are released after each completed delay instead of accumulating during longer pairing attempts.
+
 ## [0.1.1] - 2026-10-25
 
 ### Added

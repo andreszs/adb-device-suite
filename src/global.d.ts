@@ -11,7 +11,7 @@ declare global {
       disconnect: (endpoint: string) => Promise<ActionResult>;
       pair: (endpoint: string, code: string) => Promise<ActionResult>;
       pairByQr: (serviceName: string, password: string) => Promise<ActionResult>;
-      cancelQrPairing: () => Promise<void>;
+      cancelPairing: () => Promise<void>;
       enableWireless: (serial: string) => Promise<ActionResult>;
       restartServer: () => Promise<ActionResult>;
       chooseAdb: () => Promise<{ settings: AppSettings; snapshot: AdbSnapshot } | null>;
@@ -24,11 +24,12 @@ declare global {
       openExternal: (url: string) => Promise<void>;
       onSnapshot: (callback: (snapshot: AdbSnapshot) => void) => () => void;
       onSettings: (callback: (settings: AppSettings) => void) => () => void;
-      onQrPairingProgress: (callback: (progress: QrPairingProgress) => void) => () => void;
+      onPairingProgress: (callback: (progress: PairingProgress) => void) => () => void;
     };
   }
 
-  interface QrPairingProgress {
+  interface PairingProgress {
+    method: "code" | "qr";
     phase: "connecting";
     pairingEndpoint: string;
     connectionTimeoutSeconds: number;

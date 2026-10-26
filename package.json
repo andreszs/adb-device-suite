@@ -1,6 +1,6 @@
 {
   "name": "adb-device-suite",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "A cross-platform desktop toolkit for managing Android devices over ADB.",
   "author": "Andrés Zsögön",
   "license": "MIT",

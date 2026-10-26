@@ -160,14 +160,18 @@ function endpointHost(endpoint) {
 function waitForDelay(delay, signal) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
-      reject(new Error("QR pairing was cancelled."));
+      reject(new Error("Pairing was cancelled."));
       return;
     }
-    const timer = setTimeout(resolve, delay);
-    signal?.addEventListener("abort", () => {
+    const onAbort = () => {
       clearTimeout(timer);
-      reject(new Error("QR pairing was cancelled."));
-    }, { once: true });
+      reject(new Error("Pairing was cancelled."));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, delay);
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -349,10 +353,22 @@ class AdbService {
     return { endpoint, message: output };
   }
 
-  async pair(rawEndpoint, pairingCode) {
+  async pair(rawEndpoint, pairingCode, options = {}) {
     const code = String(pairingCode || "").trim();
     if (!/^\d{6}$/.test(code)) throw new Error("The pairing code must contain 6 digits.");
-    return this.#pairWithSecret(rawEndpoint, code);
+    const pairingResult = await this.#pairWithSecret(rawEndpoint, code);
+    if (options.signal?.aborted) throw new Error("Pairing was cancelled.");
+    options.onPaired?.({ endpoint: pairingResult.endpoint });
+    const connectionResult = await this.#connectAfterPairing(
+      pairingResult.endpoint,
+      options.signal,
+      options.connectionTimeout,
+    );
+    return {
+      ...connectionResult,
+      pairingEndpoint: pairingResult.endpoint,
+      message: `${pairingResult.message} ${connectionResult.message}`.trim(),
+    };
   }
 
   async pairByQr(rawServiceName, rawPassword, options = {}) {
@@ -361,13 +377,14 @@ class AdbService {
     const deadline = Date.now() + timeout;
 
     while (Date.now() < deadline) {
-      if (signal?.aborted) throw new Error("QR pairing was cancelled.");
+      if (signal?.aborted) throw new Error("Pairing was cancelled.");
       const { stdout } = await this.run(["mdns", "services"], 5_000);
       const service = parseMdnsServices(stdout).find((item) => (
         item.type === "pairing" && item.serviceName === serviceName
       ));
       if (service) {
         const pairingResult = await this.#pairWithSecret(service.endpoint, password);
+        if (signal?.aborted) throw new Error("Pairing was cancelled.");
         options.onPaired?.({ endpoint: pairingResult.endpoint });
         const connectionResult = await this.#connectAfterPairing(service.endpoint, signal);
         return {
@@ -387,7 +404,7 @@ class AdbService {
     const deadline = Date.now() + timeout;
 
     while (Date.now() < deadline) {
-      if (signal?.aborted) throw new Error("QR pairing was cancelled.");
+      if (signal?.aborted) throw new Error("Pairing was cancelled.");
       const [{ stdout: devicesOutput }, mdnsResult] = await Promise.all([
         this.run(["devices", "-l"], 8_000),
         this.run(["mdns", "services"], 5_000).catch(() => ({ stdout: "" })),

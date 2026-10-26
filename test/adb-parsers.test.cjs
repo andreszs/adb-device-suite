@@ -89,6 +89,37 @@ test("validateEndpoint normalizes safe endpoints and rejects invalid ports", () 
   assert.throws(() => validateEndpoint("192.168.1.2:99999"), /between/);
 });
 
+test("pairing by code waits for the connection service instead of returning halfway", async () => {
+  const adb = new AdbService();
+  const calls = [];
+  const progress = [];
+  adb.run = async (args) => {
+    calls.push(args);
+    if (args[0] === "pair") {
+      return { stdout: "Successfully paired to 192.168.1.87:46305", stderr: "" };
+    }
+    if (args[0] === "devices") return { stdout: "List of devices attached", stderr: "" };
+    if (args[0] === "mdns") {
+      return {
+        stdout: `List of discovered mdns services
+adb-R9MNA00VMTJ-random _adb-tls-connect._tcp 192.168.1.87:39421`,
+        stderr: "",
+      };
+    }
+    if (args[0] === "connect") return { stdout: "connected to 192.168.1.87:39421", stderr: "" };
+    return { stdout: "", stderr: "" };
+  };
+
+  const result = await adb.pair("192.168.1.87:46305", "123456", {
+    onPaired: (event) => progress.push(event),
+  });
+
+  assert.equal(result.pairingEndpoint, "192.168.1.87:46305");
+  assert.equal(result.endpoint, "192.168.1.87:39421");
+  assert.deepEqual(progress, [{ endpoint: "192.168.1.87:46305" }]);
+  assert.deepEqual(calls.map((args) => args[0]), ["pair", "devices", "mdns", "connect"]);
+});
+
 test("pairByQr waits for the requested QR service and pairs with its generated secret", async () => {
   const adb = new AdbService();
   const calls = [];

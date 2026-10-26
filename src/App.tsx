@@ -340,7 +340,7 @@ function ConnectionModal({
   initialEndpoint,
   busy,
   onClose,
-  onCancelQrPair,
+  onCancelPairing,
   onQrPair,
   onSubmit,
 }: {
@@ -348,7 +348,7 @@ function ConnectionModal({
   initialEndpoint: string;
   busy: boolean;
   onClose: () => void;
-  onCancelQrPair: () => Promise<void>;
+  onCancelPairing: () => Promise<void>;
   onQrPair: (serviceName: string, password: string) => Promise<void>;
   onSubmit: (endpoint: string, code?: string) => void;
 }) {
@@ -360,16 +360,22 @@ function ConnectionModal({
   const [qrStatus, setQrStatus] = useState<"idle" | "waiting" | "connecting" | "error">("idle");
   const [qrPaired, setQrPaired] = useState(false);
   const [qrError, setQrError] = useState("");
+  const [codePaired, setCodePaired] = useState(false);
   const qrAttempt = useRef(0);
 
-  useEffect(() => window.adbSuite.onQrPairingProgress((progress) => {
+  useEffect(() => window.adbSuite.onPairingProgress((progress) => {
     if (progress.phase !== "connecting") return;
-    setQrPaired(true);
-    setQrStatus("connecting");
+    if (progress.method === "qr") {
+      setQrPaired(true);
+      setQrStatus("connecting");
+    } else {
+      setCodePaired(true);
+    }
   }), []);
 
   function submit(event: FormEvent) {
     event.preventDefault();
+    setCodePaired(false);
     onSubmit(endpoint.trim(), mode === "pair" ? code.trim() : undefined);
   }
 
@@ -390,10 +396,11 @@ function ConnectionModal({
   }
 
   function changePairMethod(nextMethod: PairMethod) {
-    if (nextMethod === pairMethod) return;
+    if (nextMethod === pairMethod || busy) return;
     qrAttempt.current += 1;
-    if (qrStatus === "waiting" || qrStatus === "connecting") void onCancelQrPair();
+    if (qrStatus === "waiting" || qrStatus === "connecting") void onCancelPairing();
     setPairMethod(nextMethod);
+    setCodePaired(false);
     setQrStatus("idle");
     setQrPaired(false);
     setQrError("");
@@ -402,7 +409,9 @@ function ConnectionModal({
 
   function closeModal() {
     qrAttempt.current += 1;
-    if (qrStatus === "waiting" || qrStatus === "connecting") void onCancelQrPair();
+    if ((mode === "pair" && busy) || qrStatus === "waiting" || qrStatus === "connecting") {
+      void onCancelPairing();
+    }
     onClose();
   }
 
@@ -422,6 +431,7 @@ function ConnectionModal({
             <button
               aria-selected={pairMethod === "code"}
               className={pairMethod === "code" ? "active" : ""}
+              disabled={busy}
               onClick={() => changePairMethod("code")}
               role="tab"
               title={t("connection.codeTooltip")}
@@ -430,6 +440,7 @@ function ConnectionModal({
             <button
               aria-selected={pairMethod === "qr"}
               className={pairMethod === "qr" ? "active" : ""}
+              disabled={busy}
               onClick={() => changePairMethod("qr")}
               role="tab"
               title={t("connection.qrTooltip")}
@@ -475,6 +486,7 @@ function ConnectionModal({
             {t("connection.endpoint")}
             <input
               autoFocus
+              disabled={busy}
               placeholder="192.168.1.20:37123"
               required
               value={endpoint}
@@ -486,6 +498,7 @@ function ConnectionModal({
               {t("connection.pairCode")}
               <input
                 autoComplete="one-time-code"
+                disabled={busy}
                 inputMode="numeric"
                 maxLength={6}
                 pattern="[0-9]{6}"
@@ -501,10 +514,18 @@ function ConnectionModal({
               ? t("connection.pairHelp")
               : t("connection.connectHelp")}
           </p>
+          {mode === "pair" && busy && (
+            <div aria-live="polite" className={`code-pairing-status ${codePaired ? "connecting" : "pairing"}`}>
+              <strong>{codePaired ? t("connection.qrPairedTitle") : t("common.working")}</strong>
+              <span>{codePaired ? t("connection.qrConnecting") : t("connection.pairHelp")}</span>
+            </div>
+          )}
           <div className="modal-actions">
             <button className="button text" onClick={closeModal} title={t("connection.cancelTooltip")} type="button">{t("common.cancel")}</button>
             <button className="button primary" disabled={busy} title={mode === "pair" ? t("connection.pairTooltip") : t("connection.connectTooltip")} type="submit">
-              {busy ? t("common.working") : mode === "pair" ? t("connection.pairButton") : t("common.connect")}
+              {busy
+                ? codePaired ? t("device.connecting") : t("common.working")
+                : mode === "pair" ? t("connection.pairButton") : t("common.connect")}
             </button>
           </div>
           </form>
@@ -765,7 +786,10 @@ export default function App() {
       setModal(null);
       await refresh();
     } catch (error) {
-      setToast({ type: "error", message: friendlyError(error, t) });
+      const message = friendlyError(error, t);
+      if (!(key === "modal:pair" && message === "Pairing was cancelled.")) {
+        setToast({ type: "error", message });
+      }
     } finally {
       setBusy(null);
     }
@@ -777,10 +801,15 @@ export default function App() {
   }
 
   async function pairByQr(serviceName: string, password: string) {
-    await window.adbSuite.pairByQr(serviceName, password);
-    setToast({ type: "success", message: t("status.paired") });
-    setModal(null);
-    await refresh();
+    setBusy("modal:pair-qr");
+    try {
+      await window.adbSuite.pairByQr(serviceName, password);
+      setToast({ type: "success", message: t("status.paired") });
+      setModal(null);
+      await refresh();
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function chooseAdb() {
@@ -1107,7 +1136,7 @@ export default function App() {
           initialEndpoint={modalEndpoint}
           key={`${modal}:${modalEndpoint}`}
           mode={modal}
-          onCancelQrPair={() => window.adbSuite.cancelQrPairing()}
+          onCancelPairing={() => window.adbSuite.cancelPairing()}
           onClose={() => setModal(null)}
           onQrPair={pairByQr}
           onSubmit={(endpoint, code) => action(`modal:${modal}`, () => modal === "pair"

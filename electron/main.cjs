@@ -16,7 +16,7 @@ let store;
 let reconnectManager;
 let pollTimer;
 let pollRunning = false;
-let qrPairingController = null;
+let pairingController = null;
 
 function createWindow() {
   const savedSettings = store.get();
@@ -138,19 +138,37 @@ function registerIpc() {
   });
 
   ipcMain.handle("adb:pair", async (_event, { endpoint, code }) => {
-    const result = await adbService.pair(endpoint, code);
-    await pollDevices();
-    return result;
+    if (pairingController) throw new Error("A pairing operation is already in progress.");
+    const controller = new AbortController();
+    pairingController = controller;
+    try {
+      const result = await adbService.pair(endpoint, code, {
+        signal: controller.signal,
+        onPaired: ({ endpoint: pairingEndpoint }) => _event.sender.send("adb:pairing-progress", {
+          method: "code",
+          phase: "connecting",
+          pairingEndpoint,
+          connectionTimeoutSeconds: 20,
+        }),
+      });
+      const snapshot = await adbService.snapshot();
+      rememberFromSnapshot(result.endpoint, snapshot, { mode: "tls" });
+      sendSnapshot(snapshot);
+      return { ...result, settings: currentSettings() };
+    } finally {
+      if (pairingController === controller) pairingController = null;
+    }
   });
 
   ipcMain.handle("adb:pair-qr", async (event, { serviceName, password }) => {
-    qrPairingController?.abort();
+    if (pairingController) throw new Error("A pairing operation is already in progress.");
     const controller = new AbortController();
-    qrPairingController = controller;
+    pairingController = controller;
     try {
       const result = await adbService.pairByQr(serviceName, password, {
         signal: controller.signal,
-        onPaired: ({ endpoint }) => event.sender.send("adb:qr-pairing-progress", {
+        onPaired: ({ endpoint }) => event.sender.send("adb:pairing-progress", {
+          method: "qr",
           phase: "connecting",
           pairingEndpoint: endpoint,
           connectionTimeoutSeconds: 20,
@@ -161,13 +179,12 @@ function registerIpc() {
       sendSnapshot(snapshot);
       return { ...result, settings: currentSettings() };
     } finally {
-      if (qrPairingController === controller) qrPairingController = null;
+      if (pairingController === controller) pairingController = null;
     }
   });
 
-  ipcMain.handle("adb:cancel-pair-qr", () => {
-    qrPairingController?.abort();
-    qrPairingController = null;
+  ipcMain.handle("adb:cancel-pairing", () => {
+    pairingController?.abort();
   });
 
   ipcMain.handle("adb:enable-wireless", async (_event, serial) => {
@@ -285,6 +302,6 @@ app.whenReady().then(() => {
 
 app.on("window-all-closed", () => {
   if (pollTimer) clearInterval(pollTimer);
-  qrPairingController?.abort();
+  pairingController?.abort();
   if (process.platform !== "darwin") app.quit();
 });

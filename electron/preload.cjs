@@ -9,7 +9,7 @@ contextBridge.exposeInMainWorld("adbSuite", {
   disconnect: (endpoint) => ipcRenderer.invoke("adb:disconnect", endpoint),
   pair: (endpoint, code) => ipcRenderer.invoke("adb:pair", { endpoint, code }),
   pairByQr: (serviceName, password) => ipcRenderer.invoke("adb:pair-qr", { serviceName, password }),
-  cancelQrPairing: () => ipcRenderer.invoke("adb:cancel-pair-qr"),
+  cancelPairing: () => ipcRenderer.invoke("adb:cancel-pairing"),
   enableWireless: (serial) => ipcRenderer.invoke("adb:enable-wireless", serial),
   restartServer: () => ipcRenderer.invoke("adb:restart-server"),
   chooseAdb: () => ipcRenderer.invoke("settings:choose-adb"),
@@ -30,9 +30,9 @@ contextBridge.exposeInMainWorld("adbSuite", {
     ipcRenderer.on("settings:changed", listener);
     return () => ipcRenderer.removeListener("settings:changed", listener);
   },
-  onQrPairingProgress: (callback) => {
+  onPairingProgress: (callback) => {
     const listener = (_event, progress) => callback(progress);
-    ipcRenderer.on("adb:qr-pairing-progress", listener);
-    return () => ipcRenderer.removeListener("adb:qr-pairing-progress", listener);
+    ipcRenderer.on("adb:pairing-progress", listener);
+    return () => ipcRenderer.removeListener("adb:pairing-progress", listener);
   },
 });
