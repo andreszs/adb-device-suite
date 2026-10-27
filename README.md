@@ -1,3 +1,5 @@
+![GitHub package.json version](https://img.shields.io/github/package-json/v/andreszs/adb-device-suite?color=FF6D00&label=main&logo=github) [![CI](https://github.com/andreszs/adb-device-suite/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/andreszs/adb-device-suite/actions/workflows/ci.yml) ![GitHub license](https://img.shields.io/github/license/andreszs/adb-device-suite)
+
 # ADB Device Suite
 
 **Manage Android devices without the terminal.**
@@ -5,7 +7,22 @@
 ADB Device Suite is a local-first desktop application for discovering, pairing, connecting and reconnecting Android devices over ADB. It is designed for developers who want the convenience of Android Studio's device connection tools without keeping an IDE or terminal open.
 
 > [!NOTE]
-> This project is under active development. The current `0.1.0` release line focuses on reliable device discovery and wireless ADB connections.
+> This project is under active development. The current `0.1.x` release line focuses on reliable device discovery and wireless ADB connections.
+
+## Table of contents
+
+- [Screenshots](#screenshots)
+- [Features](#features)
+- [Requirements](#requirements)
+- [Development](#development)
+- [How wireless connections work](#how-wireless-connections-work)
+  - [Android 11 and newer](#android-11-and-newer)
+  - [Classic USB-to-Wi-Fi flow](#classic-usb-to-wi-fi-flow)
+- [Packaging and releases](#packaging-and-releases)
+- [Security](#security)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [License](#license)
 
 ## Screenshots
 
@@ -15,21 +32,15 @@ ADB Device Suite is a local-first desktop application for discovering, pairing, 
 
 ## Features
 
-- Groups the USB and Wi-Fi transports of each physical device into one card with model, Android version, connection types and status.
-- Converts an authorized USB connection to classic TCP/IP mode with one click.
-- Pairs Android 11+ devices using the six-digit wireless debugging code.
-- Discovers pairing and connection endpoints advertised over mDNS.
-- Saves successful network endpoints for quick reconnection.
-- Automatically reconnects known Wi-Fi devices with bounded retry backoff.
-- Tracks mDNS identities so known devices can be found after an IP address or debugging port change.
-- Provides global and per-device auto-reconnect controls in Settings.
-- Supports local aliases shared by the USB and Wi-Fi views of a device while always retaining its model name.
-- Remembers the selected light, dark or system-following theme, with light as the first-run default.
-- Detects the operating-system language on first run and lets the user freely switch between English, German, Spanish, French, Hindi, Portuguese, Russian, Japanese, Korean, Simplified Chinese and Traditional Chinese.
-- Uses native-scale Material icons for sharp, legible controls.
-- Explains unauthorized, offline and missing-ADB states in plain language.
-- Runs locally; no account, telemetry or cloud service is required.
-- Supports Windows 10+ and macOS.
+- Pair devices for wireless debugging by QR code or pairing code.
+- Discover wireless devices automatically through mDNS.
+- Switch authorized USB devices to ADB over Wi-Fi with one click.
+- Combine each device's USB and Wi-Fi connections in one card.
+- Reconnect saved devices after IP address or port changes.
+- Monitor connection, Android version, IP address, battery and charging source.
+- Inspect detailed hardware, software, security and network information for every device.
+- Reconnect, disconnect, rename and remove devices from the main window.
+- Copy IP addresses or export diagnostics as JSON.
 
 ## Requirements
 

@@ -1,13 +1,30 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CSSProperties, FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import {
   MdBrightnessAuto,
+  MdBattery0Bar,
+  MdBattery20,
+  MdBattery30,
+  MdBattery50,
+  MdBattery60,
+  MdBattery80,
+  MdBattery90,
+  MdBatteryCharging20,
+  MdBatteryCharging30,
+  MdBatteryCharging50,
+  MdBatteryCharging60,
+  MdBatteryCharging80,
+  MdBatteryCharging90,
+  MdBatteryChargingFull,
+  MdBatteryFull,
   MdCheckCircle,
   MdClose,
+  MdContentCopy,
   MdDarkMode,
   MdDeleteOutline,
   MdErrorOutline,
   MdHourglassTop,
+  MdInfoOutline,
   MdLightMode,
   MdLink,
   MdPhoneAndroid,
@@ -16,6 +33,7 @@ import {
   MdSystemUpdateAlt,
   MdUsb,
   MdWifi,
+  MdWifiOff,
 } from "react-icons/md";
 import { FaGithub } from "react-icons/fa6";
 import { useTranslation } from "react-i18next";
@@ -30,7 +48,7 @@ const EMPTY_SNAPSHOT: AdbSnapshot = {
   refreshedAt: new Date(0).toISOString(),
 };
 
-const EMPTY_SETTINGS: AppSettings = { adbPath: null, autoReconnect: true, deviceAliases: {}, savedConnections: [], themePreference: "light", languagePreference: "system" };
+const EMPTY_SETTINGS: AppSettings = { adbPath: null, autoReconnect: true, chargingAnimation: true, deviceAliases: {}, savedConnections: [], themePreference: "light", languagePreference: "system" };
 
 type ModalMode = "connect" | "pair" | null;
 type PairMethod = "code" | "qr";
@@ -50,10 +68,12 @@ const Icons = {
   Refresh: () => <MdRefresh aria-hidden="true" className="ui-icon" />,
   Usb: () => <MdUsb aria-hidden="true" className="ui-icon" />,
   Wifi: () => <MdWifi aria-hidden="true" className="ui-icon" />,
+  WifiOff: () => <MdWifiOff aria-hidden="true" className="ui-icon" />,
   Link: () => <MdLink aria-hidden="true" className="ui-icon" />,
   Settings: () => <MdSettings aria-hidden="true" className="ui-icon" />,
   Phone: () => <MdPhoneAndroid aria-hidden="true" className="ui-icon phone-glyph" />,
   Close: () => <MdClose aria-hidden="true" className="ui-icon" />,
+  Copy: () => <MdContentCopy aria-hidden="true" className="ui-icon" />,
   Trash: () => <MdDeleteOutline aria-hidden="true" className="ui-icon" />,
   LightMode: () => <MdLightMode aria-hidden="true" className="ui-icon" />,
   DarkMode: () => <MdDarkMode aria-hidden="true" className="ui-icon" />,
@@ -61,6 +81,7 @@ const Icons = {
   Hourglass: () => <MdHourglassTop aria-hidden="true" className="ui-icon" />,
   Success: () => <MdCheckCircle aria-hidden="true" className="ui-icon" />,
   Error: () => <MdErrorOutline aria-hidden="true" className="ui-icon" />,
+  Info: () => <MdInfoOutline aria-hidden="true" className="ui-icon" />,
   Update: () => <MdSystemUpdateAlt aria-hidden="true" className="ui-icon" />,
 };
 
@@ -134,7 +155,7 @@ function formatDeviceName(device: AdbDevice, t: TFunction) {
 
 function stateLabel(state: string, t: TFunction) {
   if (state === "device") return t("common.connected");
-  if (state === "unauthorized") return t("device.authorization");
+  if (state === "unauthorized") return "unauthorized";
   if (state === "offline") return t("device.offline");
   return state;
 }
@@ -147,6 +168,10 @@ function actionMessage(key: string, result: ActionResult, t: TFunction) {
   if (key === "modal:pair") return t("status.paired");
   if (key === "modal:connect") return t("status.connectedTo", { endpoint: result.endpoint || "ADB" });
   return result.message;
+}
+
+function pendingConnectionMessage(t: TFunction) {
+  return `${t("connection.qrPairedTitle")}. ${t("connection.qrConnectingHelp")}`;
 }
 
 function randomHex(bytes: number) {
@@ -193,21 +218,56 @@ function groupDevices(devices: AdbDevice[]): DeviceGroup[] {
   });
 }
 
+function BatteryIndicator({ battery }: { battery: NonNullable<AdbDevice["battery"]> }) {
+  const { t } = useTranslation();
+  const level = battery.level === null ? 0 : Math.max(0, Math.min(100, battery.level));
+  const charging = battery.status === "charging";
+  const status = t(`deviceInfo.batteryStatus.${battery.status}`);
+  const tooltip = `${level}% · ${status}`;
+  const tone = battery.status === "charging" || battery.status === "full" ? "charging" : level <= 20 ? "low" : "";
+  const BatteryIcon = charging
+    ? level <= 20 ? MdBatteryCharging20
+      : level <= 30 ? MdBatteryCharging30
+        : level <= 50 ? MdBatteryCharging50
+          : level <= 60 ? MdBatteryCharging60
+            : level <= 80 ? MdBatteryCharging80
+              : level <= 90 ? MdBatteryCharging90
+                : MdBatteryChargingFull
+    : level <= 5 ? MdBattery0Bar
+      : level <= 20 ? MdBattery20
+        : level <= 30 ? MdBattery30
+          : level <= 50 ? MdBattery50
+            : level <= 60 ? MdBattery60
+              : level <= 80 ? MdBattery80
+                : level <= 90 ? MdBattery90
+                  : MdBatteryFull;
+
+  return (
+    <div aria-label={tooltip} className={`battery-indicator ${tone}`} role="img" title={tooltip}>
+      <span className="battery-glyph"><BatteryIcon aria-hidden="true" className="ui-icon" /></span>
+    </div>
+  );
+}
+
 function DeviceCard({
   alias,
   busy,
+  chargingAnimation,
   group,
   onConnect,
   onEnableWireless,
   onDisconnect,
+  onInfo,
   onSetAlias,
 }: {
   alias: string | null;
   busy: string | null;
+  chargingAnimation: boolean;
   group: DeviceGroup;
   onConnect: (device: AdbDevice) => void;
   onEnableWireless: (serial: string) => void;
   onDisconnect: (device: AdbDevice) => void;
+  onInfo: (device: AdbDevice, name: string) => void;
   onSetAlias: (identifier: string, alias: string) => Promise<boolean>;
 }) {
   const { t } = useTranslation();
@@ -222,6 +282,18 @@ function DeviceCard({
   const ipAddress = wifi?.ipAddress || devices.find((device) => device.ipAddress)?.ipAddress;
   const ipAddresses = [...new Set(devices.flatMap((device) => device.ipAddresses || (device.ipAddress ? [device.ipAddress] : [])))];
   const connectionLabel = usb && wifi ? "USB + Wi-Fi" : usb ? "USB" : "Wi-Fi";
+  const infoDevice = devices.find((device) => device.connection === "usb" && device.state === "device")
+    || devices.find((device) => device.state === "device")
+    || null;
+  const cardBattery = infoDevice?.battery;
+  const hasBattery = cardBattery?.level !== null && cardBattery?.level !== undefined;
+  const charging = cardBattery?.status === "charging";
+  const batteryLevel = cardBattery?.level === null || cardBattery?.level === undefined
+    ? 0
+    : Math.max(0, Math.min(100, cardBattery.level));
+  const batteryStyle = hasBattery
+    ? ({ "--battery-level": `${batteryLevel}%` } as CSSProperties)
+    : undefined;
   const [editingAlias, setEditingAlias] = useState(false);
   const [aliasDraft, setAliasDraft] = useState(alias || "");
 
@@ -240,7 +312,12 @@ function DeviceCard({
   }
 
   return (
-    <article className="device-card">
+    <article className={`device-card${hasBattery ? " has-battery" : ""}${charging ? " is-charging" : ""}${charging && chargingAnimation ? " animate-charging" : ""}`} style={batteryStyle}>
+      {charging && chargingAnimation && (
+        <span aria-hidden="true" className="charging-effects">
+          <i className="charge-sheen" />
+        </span>
+      )}
       <div className={`device-icon ${wifi ? "wifi" : "usb"}`}>
         <Icons.Phone />
         <span className="connection-minis" aria-hidden="true">
@@ -292,14 +369,27 @@ function DeviceCard({
         </div>
       </div>
       <div className="device-actions">
+        {infoDevice?.battery?.level !== null && infoDevice?.battery && <BatteryIndicator battery={infoDevice.battery} />}
+        <button
+          aria-label={t("deviceInfo.buttonTooltip", { name: alias || modelName })}
+          className="icon-button device-action-icon"
+          disabled={!infoDevice || busy !== null}
+          onClick={() => infoDevice && onInfo(infoDevice, alias || modelName)}
+          title={t("deviceInfo.buttonTooltip", { name: alias || modelName })}
+          type="button"
+        >
+          <Icons.Info />
+        </button>
         {wifiConnected && wifi ? (
           <button
-            className="button ghost-danger"
+            aria-label={t("device.disconnectTooltip", { name: alias || modelName })}
+            className="icon-button device-action-icon danger"
             disabled={busy !== null}
             onClick={() => onDisconnect(wifi)}
             title={t("device.disconnectTooltip", { name: alias || modelName })}
+            type="button"
           >
-            {t("device.disconnect")}
+            <Icons.WifiOff />
           </button>
         ) : wifi ? (
           <>
@@ -335,6 +425,357 @@ function DeviceCard({
   );
 }
 
+function formatBytes(value: number | null, unavailable: string) {
+  if (value === null || !Number.isFinite(value)) return unavailable;
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let amount = value;
+  let unit = 0;
+  while (amount >= 1024 && unit < units.length - 1) {
+    amount /= 1024;
+    unit += 1;
+  }
+  return `${amount.toLocaleString(undefined, { maximumFractionDigits: unit > 2 ? 2 : 1 })} ${units[unit]}`;
+}
+
+function formatUptime(value: number | null, unavailable: string) {
+  if (value === null || !Number.isFinite(value)) return unavailable;
+  const days = Math.floor(value / 86_400);
+  const hours = Math.floor((value % 86_400) / 3_600);
+  const minutes = Math.floor((value % 3_600) / 60);
+  return [days ? `${days}d` : "", hours ? `${hours}h` : "", `${minutes}m`].filter(Boolean).join(" ");
+}
+
+function connectionAddress(serial: string) {
+  const bracketed = serial.match(/^\[([^\]]+)\]:\d+$/);
+  if (bracketed) return bracketed[1];
+  const endpoint = serial.match(/^(.+):\d+$/);
+  return endpoint?.[1] || serial;
+}
+
+function InfoField({ label, value, mono = false }: { label: string; value: ReactNode; mono?: boolean }) {
+  return (
+    <div className="info-field">
+      <dt>{label}</dt>
+      <dd className={mono ? "mono" : ""}>{value}</dd>
+    </div>
+  );
+}
+
+function StatusValue({ children, tone = "neutral" }: { children: ReactNode; tone?: "positive" | "warning" | "neutral" }) {
+  return <span className={`status-value ${tone}`}>{children}</span>;
+}
+
+type DeviceInfoTab = "summary" | "hardware" | "system" | "network";
+
+function MetricCard({ label, value, detail, progress }: { label: string; value: string; detail?: string; progress?: number | null }) {
+  const safeProgress = progress === null || progress === undefined ? null : Math.max(0, Math.min(100, progress));
+  return (
+    <article className="info-metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+      {detail && <small>{detail}</small>}
+      {safeProgress !== null && <div className="metric-track"><i style={{ width: `${safeProgress}%` }} /></div>}
+    </article>
+  );
+}
+
+function SummaryCard({ label, value, detail }: { label: string; value: string; detail: string }) {
+  return (
+    <div className="info-metric info-summary-card">
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{detail}</small>
+    </div>
+  );
+}
+
+function ResourceBar({ label, value, detail, progress }: { label: string; value: string; detail: string; progress: number | null }) {
+  const safeProgress = progress === null ? 0 : Math.max(0, Math.min(100, progress));
+  return (
+    <div className="info-resource">
+      <div><span>{label}</span><strong>{value}</strong></div>
+      <div className="metric-track"><i style={{ width: `${safeProgress}%` }} /></div>
+      <small>{detail}</small>
+    </div>
+  );
+}
+
+function DeviceInfoModal({ name, serial, onClose }: { name: string; serial: string; onClose: () => void }) {
+  const { t } = useTranslation();
+  const [info, setInfo] = useState<DeviceInfo | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<DeviceInfoTab>("summary");
+  const [refreshedAt, setRefreshedAt] = useState<Date | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [addressCopied, setAddressCopied] = useState(false);
+  const requestId = useRef(0);
+
+  const loadInfo = useCallback(async () => {
+    const currentRequest = ++requestId.current;
+    setLoading(true);
+    setError("");
+    try {
+      const result = await window.adbSuite.getDeviceInfo(serial);
+      if (requestId.current !== currentRequest) return;
+      setInfo(result);
+      setRefreshedAt(new Date());
+    } catch (reason) {
+      if (requestId.current !== currentRequest) return;
+      const message = friendlyError(reason, t);
+      setError(message === "The device is not connected or authorized." ? t("deviceInfo.connectionError") : message);
+    } finally {
+      if (requestId.current === currentRequest) setLoading(false);
+    }
+  }, [serial, t]);
+
+  useEffect(() => {
+    void loadInfo();
+    return () => { requestId.current += 1; };
+  }, [loadInfo]);
+
+  const copyInfo = useCallback(async () => {
+    if (!info) return;
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(info, null, 2));
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1_800);
+    } catch {
+      setError(t("deviceInfo.copyFailed"));
+    }
+  }, [info, t]);
+
+  const address = connectionAddress(serial);
+  const copyAddress = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(address);
+      setAddressCopied(true);
+      window.setTimeout(() => setAddressCopied(false), 1_800);
+    } catch {
+      setError(t("deviceInfo.copyFailed"));
+    }
+  }, [address, t]);
+
+  const unavailable = t("deviceInfo.unavailable");
+  const value = (candidate: string | number | null | undefined) => candidate ?? unavailable;
+  const yesNo = (candidate: boolean | null) => candidate === null ? unavailable : t(candidate ? "deviceInfo.enabled" : "deviceInfo.disabled");
+  const securityValue = (candidate: string | null) => candidate
+    ? t(`deviceInfo.securityValues.${candidate.toLowerCase()}`, { defaultValue: candidate })
+    : unavailable;
+  const batteryStatus = info ? t(`deviceInfo.batteryStatus.${info.battery.status}`) : unavailable;
+  const batteryHealth = info ? t(`deviceInfo.batteryHealth.${info.battery.health}`) : unavailable;
+  const batteryStatusTone = info?.battery.status === "charging" || info?.battery.status === "full"
+    ? "positive"
+    : info?.battery.status === "notCharging" ? "warning" : "neutral";
+  const powerSources = info?.battery.sources.map((source) => source === "Wireless" ? t("deviceInfo.wireless") : source).join(", ") || unavailable;
+  const connectionType = serial.includes(":") ? "Wi-Fi" : "USB";
+  const ramUsed = info && info.hardware.ramTotalBytes !== null && info.hardware.ramAvailableBytes !== null
+    ? info.hardware.ramTotalBytes - info.hardware.ramAvailableBytes
+    : null;
+  const ramPercent = ramUsed !== null && info?.hardware.ramTotalBytes
+    ? (ramUsed / info.hardware.ramTotalBytes) * 100
+    : null;
+  const orientation = info?.hardware.screen.orientation
+    ? t(`deviceInfo.orientation.${info.hardware.screen.orientation}`)
+    : unavailable;
+  const skinLabel = info?.system.skinVersion
+    ? `${info.system.skinName || t("deviceInfo.systemLayer")} ${info.system.skinVersion}`
+    : null;
+  const identitySummary = info
+    ? [info.identity.brand || info.identity.manufacturer, info.identity.model].filter(Boolean).join(" · ") || unavailable
+    : unavailable;
+  const identityDetail = info
+    ? [info.identity.device, info.identity.product].filter(Boolean).join(" · ") || unavailable
+    : unavailable;
+  const softwareSummary = info?.system.androidVersion
+    ? `Android ${info.system.androidVersion} · API ${info.system.sdk || "—"}`
+    : unavailable;
+  const softwareDetail = info
+    ? [skinLabel, info.system.securityPatch, info.system.buildId].filter(Boolean).join(" · ") || unavailable
+    : unavailable;
+  const tabs: Array<{ id: DeviceInfoTab; label: string }> = [
+    { id: "summary", label: t("deviceInfo.tabs.summary") },
+    { id: "hardware", label: t("deviceInfo.tabs.hardware") },
+    { id: "system", label: t("deviceInfo.tabs.system") },
+    { id: "network", label: t("deviceInfo.tabs.network") },
+  ];
+
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section className="modal device-info-modal" aria-modal="true" role="dialog" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="modal-header info-modal-header">
+          <div className="info-title-block">
+            <span className="eyebrow">{t("deviceInfo.eyebrow")}</span>
+            <h2>{name}</h2>
+            <div className={`info-address-pill${addressCopied ? " copied" : ""}`}>
+              <code>{address}</code>
+              <button aria-label={`${t("deviceInfo.copy")} ${address}`} onClick={() => void copyAddress()} title={`${t("deviceInfo.copy")} ${address}`} type="button"><Icons.Copy /></button>
+            </div>
+          </div>
+          <div className="info-header-actions">
+            <button className="button small secondary has-icon" disabled={loading} onClick={() => void loadInfo()} title={t("deviceInfo.refreshTooltip")} type="button"><Icons.Refresh /> {t("deviceInfo.refresh")}</button>
+            <button className="button small secondary" disabled={!info || loading} onClick={() => void copyInfo()} title={t("deviceInfo.copyTooltip")} type="button">{copied ? t("deviceInfo.copied") : t("deviceInfo.copy")}</button>
+            <button aria-label={t("common.close")} className="icon-button" onClick={onClose} title={t("deviceInfo.closeTooltip")}><Icons.Close /></button>
+          </div>
+        </div>
+
+        {info && (
+          <div aria-label={t("deviceInfo.tabs.label")} className="info-tabs" role="tablist">
+            {tabs.map((tab) => (
+              <button aria-selected={activeTab === tab.id} className={activeTab === tab.id ? "active" : ""} key={tab.id} onClick={() => setActiveTab(tab.id)} role="tab" title={tab.label} type="button">{tab.label}</button>
+            ))}
+          </div>
+        )}
+
+        {!info && loading && <div className="info-loading" role="status"><span />{t("deviceInfo.loading")}</div>}
+        {error && !info && <div className="info-error" role="alert"><Icons.Error /><span>{error}</span></div>}
+        {info && (
+          <div className={`device-info-content tab-${activeTab}${loading ? " refreshing" : ""}`}>
+            {error && <div className="info-inline-error" role="alert"><Icons.Error /><span>{error}</span></div>}
+
+            {activeTab === "summary" && (
+              <>
+                <div className="info-summary-columns">
+                  <SummaryCard label={t("deviceInfo.identity")} value={identitySummary} detail={identityDetail} />
+                  <SummaryCard label={t("deviceInfo.software")} value={softwareSummary} detail={softwareDetail} />
+                </div>
+                <div className="info-metrics-grid">
+                  <MetricCard label={t("deviceInfo.battery")} value={info.battery.level === null ? unavailable : `${info.battery.level}%`} detail={`${batteryStatus} · ${info.battery.temperatureC ?? "—"} °C`} progress={info.battery.level} />
+                  <MetricCard label={t("deviceInfo.screen")} value={value(info.hardware.screen.resolution) as string} detail={`${info.hardware.screen.densityDpi ?? "—"} dpi · ${orientation}`} />
+                  <MetricCard label={t("deviceInfo.ram")} value={formatBytes(info.hardware.ramAvailableBytes, unavailable)} detail={t("deviceInfo.availableOf", { total: formatBytes(info.hardware.ramTotalBytes, unavailable) })} progress={ramPercent} />
+                  <MetricCard label={t("deviceInfo.storageAvailable")} value={formatBytes(info.hardware.storage.availableBytes, unavailable)} detail={t("deviceInfo.availableOf", { total: formatBytes(info.hardware.storage.totalBytes, unavailable) })} progress={info.hardware.storage.usedPercent} />
+                  <MetricCard label={t("deviceInfo.connection")} value={connectionType} detail={serial} />
+                  <MetricCard label={t("deviceInfo.uptime")} value={formatUptime(info.system.uptimeSeconds, unavailable)} detail={info.system.timeZone || unavailable} />
+                </div>
+              </>
+            )}
+
+            {activeTab === "hardware" && (
+              <div className="info-two-columns">
+                <section className="info-section">
+                  <h3>{t("deviceInfo.processor")}</h3>
+                  <dl>
+                    <InfoField label={t("deviceInfo.cpuModel")} value={value(info.hardware.cpuModel)} />
+                    <InfoField label={t("deviceInfo.cpuCores")} value={value(info.hardware.cpuCores)} />
+                    <InfoField label={t("deviceInfo.cpuAbis")} value={info.hardware.cpuAbis.join(", ") || unavailable} />
+                  </dl>
+                </section>
+                <section className="info-section">
+                  <h3>{t("deviceInfo.screen")}</h3>
+                  <dl>
+                    <InfoField label={t("deviceInfo.resolution")} value={value(info.hardware.screen.resolution)} />
+                    <InfoField label={t("deviceInfo.density")} value={info.hardware.screen.densityDpi === null ? unavailable : `${info.hardware.screen.densityDpi} dpi`} />
+                    <InfoField label={t("deviceInfo.currentOrientation")} value={orientation} />
+                  </dl>
+                </section>
+                <section className="info-section">
+                  <h3>{t("deviceInfo.memory")}</h3>
+                  <div className="info-resource-list">
+                    <ResourceBar
+                      label={t("deviceInfo.ram")}
+                      value={`${formatBytes(ramUsed, unavailable)} / ${formatBytes(info.hardware.ramTotalBytes, unavailable)}`}
+                      detail={`${t("deviceInfo.ramAvailable")}: ${formatBytes(info.hardware.ramAvailableBytes, unavailable)}`}
+                      progress={ramPercent}
+                    />
+                    <ResourceBar
+                      label={t("deviceInfo.storageUsed")}
+                      value={`${formatBytes(info.hardware.storage.usedBytes, unavailable)} / ${formatBytes(info.hardware.storage.totalBytes, unavailable)}`}
+                      detail={`${t("deviceInfo.storageAvailable")}: ${formatBytes(info.hardware.storage.availableBytes, unavailable)}`}
+                      progress={info.hardware.storage.usedPercent}
+                    />
+                  </div>
+                </section>
+                <section className="info-section">
+                  <h3>{t("deviceInfo.battery")}<StatusValue tone={batteryStatusTone}>{batteryStatus}</StatusValue></h3>
+                  <dl>
+                    <InfoField label={t("deviceInfo.level")} value={info.battery.level === null ? unavailable : `${info.battery.level}%`} />
+                    <InfoField label={t("deviceInfo.health")} value={batteryHealth} />
+                    <InfoField label={t("deviceInfo.temperature")} value={info.battery.temperatureC === null ? unavailable : `${info.battery.temperatureC} °C`} />
+                    <InfoField label={t("deviceInfo.voltage")} value={info.battery.voltageMv === null ? unavailable : `${(info.battery.voltageMv / 1000).toLocaleString(undefined, { maximumFractionDigits: 3 })} V`} />
+                    <InfoField label={t("deviceInfo.powerSource")} value={powerSources} />
+                  </dl>
+                </section>
+              </div>
+            )}
+
+            {activeTab === "system" && (
+              <div className="info-two-columns">
+                <section className="info-section">
+                  <h3>{t("deviceInfo.system")}</h3>
+                  <dl>
+                    <InfoField label={t("deviceInfo.androidVersion")} value={value(info.system.androidVersion)} />
+                    <InfoField label={t("deviceInfo.apiLevel")} value={value(info.system.sdk)} />
+                    <InfoField label={info.system.skinName || t("deviceInfo.systemLayer")} value={value(info.system.skinVersion)} />
+                    <InfoField label={t("deviceInfo.securityPatch")} value={value(info.system.securityPatch)} />
+                    <InfoField label={t("deviceInfo.buildId")} value={value(info.system.buildId)} mono />
+                    <InfoField label={t("deviceInfo.buildType")} value={[info.system.buildType, info.system.buildTags].filter(Boolean).join(" · ") || unavailable} mono />
+                  </dl>
+                </section>
+                <section className="info-section">
+                  <h3>{t("deviceInfo.security")}</h3>
+                  <dl>
+                    <InfoField label={t("deviceInfo.encryption")} value={[info.security.encryption, info.security.encryptionType].filter(Boolean).map((item) => securityValue(item)).join(" · ") || unavailable} />
+                    <InfoField label={t("deviceInfo.verifiedBoot")} value={<StatusValue tone={info.security.verifiedBoot?.toLowerCase() === "green" ? "positive" : "warning"}>{securityValue(info.security.verifiedBoot)}</StatusValue>} />
+                    <InfoField label={t("deviceInfo.bootloader")} value={<StatusValue tone={info.security.bootloader?.toLowerCase() === "locked" ? "positive" : "warning"}>{securityValue(info.security.bootloader)}</StatusValue>} />
+                    <InfoField label="SELinux" value={<StatusValue tone={info.security.selinux?.toLowerCase() === "enforcing" ? "positive" : "warning"}>{securityValue(info.security.selinux)}</StatusValue>} />
+                    <InfoField label={t("deviceInfo.adbSecure")} value={<StatusValue tone={info.security.adbSecure ? "positive" : "warning"}>{yesNo(info.security.adbSecure)}</StatusValue>} />
+                    <InfoField label={t("deviceInfo.developerOptions")} value={<StatusValue tone="neutral">{yesNo(info.system.developerOptions)}</StatusValue>} />
+                  </dl>
+                </section>
+                <section className="info-section info-wide">
+                  <h3>{t("deviceInfo.environment")}</h3>
+                  <dl>
+                    <InfoField label={t("deviceInfo.locale")} value={value(info.system.locale)} />
+                    <InfoField label={t("deviceInfo.timeZone")} value={value(info.system.timeZone)} />
+                    <InfoField label={t("deviceInfo.uptime")} value={formatUptime(info.system.uptimeSeconds, unavailable)} />
+                  </dl>
+                </section>
+                <details className="info-advanced info-wide">
+                  <summary>{t("deviceInfo.technicalDetails")}</summary>
+                  <dl>
+                    <InfoField label={t("deviceInfo.serial")} value={value(info.identity.hardwareSerial || info.serial)} mono />
+                    <InfoField label={t("deviceInfo.bootReason")} value={value(info.system.bootReason)} mono />
+                    <InfoField label={t("deviceInfo.fingerprint")} value={value(info.system.buildFingerprint)} mono />
+                  </dl>
+                </details>
+              </div>
+            )}
+
+            {activeTab === "network" && (
+              <div className="info-two-columns">
+                <section className="info-section">
+                  <h3>{t("deviceInfo.connection")}</h3>
+                  <dl>
+                    <InfoField label="ADB" value={`${connectionType}: ${serial}`} mono />
+                    <InfoField label="Wi-Fi" value={yesNo(info.network.wifiEnabled)} />
+                    <InfoField label={t("deviceInfo.airplaneMode")} value={yesNo(info.network.airplaneMode)} />
+                  </dl>
+                </section>
+                <section className="info-section">
+                  <h3>{t("deviceInfo.interfaces")}</h3>
+                  <dl>
+                    {info.network.interfaces.length
+                      ? info.network.interfaces.map((item) => <InfoField key={`${item.name}:${item.address}`} label={item.name} value={item.address} mono />)
+                      : <InfoField label={t("deviceInfo.addresses")} value={unavailable} />}
+                  </dl>
+                </section>
+                <details className="info-advanced info-wide">
+                  <summary>{t("deviceInfo.routes")} <span>{info.network.routes.length}</span></summary>
+                  <div className="route-list">{info.network.routes.length ? info.network.routes.map((route) => <code key={route}>{route}</code>) : unavailable}</div>
+                </details>
+              </div>
+            )}
+          </div>
+        )}
+        <div className="info-modal-footer">
+          <span>{refreshedAt ? t("deviceInfo.updatedAt", { time: refreshedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) }) : ""}</span>
+          <button className="button secondary" onClick={onClose} title={t("deviceInfo.closeTooltip")} type="button">{t("common.close")}</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function ConnectionModal({
   mode,
   initialEndpoint,
@@ -349,7 +790,7 @@ function ConnectionModal({
   busy: boolean;
   onClose: () => void;
   onCancelPairing: () => Promise<void>;
-  onQrPair: (serviceName: string, password: string) => Promise<void>;
+  onQrPair: (serviceName: string, password: string) => Promise<ActionResult>;
   onSubmit: (endpoint: string, code?: string) => void;
 }) {
   const { t } = useTranslation();
@@ -357,25 +798,27 @@ function ConnectionModal({
   const [code, setCode] = useState("");
   const [pairMethod, setPairMethod] = useState<PairMethod>("code");
   const [qrCredentials, setQrCredentials] = useState(createQrPairingCredentials);
-  const [qrStatus, setQrStatus] = useState<"idle" | "waiting" | "connecting" | "error">("idle");
+  const [qrStatus, setQrStatus] = useState<"idle" | "waiting" | "connecting" | "pending" | "error">("idle");
   const [qrPaired, setQrPaired] = useState(false);
   const [qrError, setQrError] = useState("");
   const [codePaired, setCodePaired] = useState(false);
+  const [codePending, setCodePending] = useState(false);
   const qrAttempt = useRef(0);
 
   useEffect(() => window.adbSuite.onPairingProgress((progress) => {
-    if (progress.phase !== "connecting") return;
     if (progress.method === "qr") {
       setQrPaired(true);
-      setQrStatus("connecting");
+      setQrStatus(progress.phase === "pending" ? "pending" : "connecting");
     } else {
       setCodePaired(true);
+      setCodePending(progress.phase === "pending");
     }
   }), []);
 
   function submit(event: FormEvent) {
     event.preventDefault();
     setCodePaired(false);
+    setCodePending(false);
     onSubmit(endpoint.trim(), mode === "pair" ? code.trim() : undefined);
   }
 
@@ -401,6 +844,7 @@ function ConnectionModal({
     if (qrStatus === "waiting" || qrStatus === "connecting") void onCancelPairing();
     setPairMethod(nextMethod);
     setCodePaired(false);
+    setCodePending(false);
     setQrStatus("idle");
     setQrPaired(false);
     setQrError("");
@@ -451,13 +895,13 @@ function ConnectionModal({
 
         {mode === "pair" && pairMethod === "qr" ? (
           <div className="qr-pairing-panel">
-            <div className={`qr-code-frame${qrStatus === "error" ? " expired" : qrStatus === "connecting" ? " paired" : ""}`}>
+            <div className={`qr-code-frame${qrStatus === "error" ? " expired" : qrStatus === "connecting" || qrStatus === "pending" ? " paired" : ""}`}>
               {qrStatus === "error" ? (
                 <div className="qr-expired-state">
                   <Icons.Error />
                   <strong>{t(qrPaired ? "connection.qrConnectionFailed" : "connection.qrExpired")}</strong>
                 </div>
-              ) : qrStatus === "connecting" ? (
+              ) : qrStatus === "connecting" || qrStatus === "pending" ? (
                 <div className="qr-paired-state">
                   <Icons.Success />
                   <strong>{t("connection.qrPaired")}</strong>
@@ -471,10 +915,10 @@ function ConnectionModal({
             <p aria-live="polite" className={`qr-status ${qrStatus}`}>
               {qrStatus === "error"
                 ? qrError
-                : t(qrStatus === "connecting" ? "connection.qrConnecting" : "connection.qrWaiting")}
+                : qrStatus === "pending" ? pendingConnectionMessage(t) : t(qrStatus === "connecting" ? "connection.qrConnecting" : "connection.qrWaiting")}
             </p>
             <div className="modal-actions">
-              <button className="button text" onClick={closeModal} title={t("connection.cancelTooltip")} type="button">{t("common.cancel")}</button>
+              <button className="button text" onClick={closeModal} title={qrStatus === "pending" ? t("connection.closeDialog") : t("connection.cancelTooltip")} type="button">{t(qrStatus === "pending" ? "common.close" : "common.cancel")}</button>
               {qrStatus === "error" && !qrPaired && (
                 <button className="button primary" onClick={() => void beginQrPairing()} title={t("connection.qrRetryTooltip")} type="button">{t("connection.qrRetry")}</button>
               )}
@@ -517,31 +961,28 @@ function ConnectionModal({
           {mode === "pair" && busy && (
             <div aria-live="polite" className={`code-pairing-status ${codePaired ? "connecting" : "pairing"}`}>
               <strong>{codePaired ? t("connection.qrPairedTitle") : t("common.working")}</strong>
-              <span>{codePaired ? t("connection.qrConnecting") : t("connection.pairHelp")}</span>
+              <span>{codePending ? pendingConnectionMessage(t) : codePaired ? t("connection.qrConnecting") : t("connection.pairHelp")}</span>
+            </div>
+          )}
+          {mode === "pair" && codePending && !busy && (
+            <div aria-live="polite" className="code-pairing-status pending">
+              <strong>{t("connection.qrPairedTitle")}</strong>
+              <span>{pendingConnectionMessage(t)}</span>
             </div>
           )}
           <div className="modal-actions">
-            <button className="button text" onClick={closeModal} title={t("connection.cancelTooltip")} type="button">{t("common.cancel")}</button>
-            <button className="button primary" disabled={busy} title={mode === "pair" ? t("connection.pairTooltip") : t("connection.connectTooltip")} type="submit">
+            <button className="button text" onClick={closeModal} title={codePending ? t("connection.closeDialog") : t("connection.cancelTooltip")} type="button">{t(codePending ? "common.close" : "common.cancel")}</button>
+            {!codePending && <button className="button primary" disabled={busy} title={mode === "pair" ? t("connection.pairTooltip") : t("connection.connectTooltip")} type="submit">
               {busy
                 ? codePaired ? t("device.connecting") : t("common.working")
                 : mode === "pair" ? t("connection.pairButton") : t("common.connect")}
-            </button>
+            </button>}
           </div>
           </form>
         )}
       </section>
     </div>
   );
-}
-
-function reconnectLabel(connection: SavedConnection, t: TFunction) {
-  const status = connection.reconnect?.status;
-  if (status === "connected") return t("common.connected");
-  if (status === "reconnecting") return t("reconnect.reconnecting");
-  if (status === "needs-usb") return t("reconnect.needsUsb");
-  if (status === "paused") return t("reconnect.paused");
-  return t("reconnect.waiting");
 }
 
 function Toggle({ checked, disabled = false, label, onChange }: { checked: boolean; disabled?: boolean; label: string; onChange: (checked: boolean) => void }) {
@@ -595,7 +1036,7 @@ function SettingsModal({
   onChooseAdb,
   onClose,
   onLanguageChange,
-  onToggleConnection,
+  onToggleChargingAnimation,
   onToggleGlobal,
 }: {
   adbPath: string | null;
@@ -604,7 +1045,7 @@ function SettingsModal({
   onChooseAdb: () => void;
   onClose: () => void;
   onLanguageChange: (language: LanguagePreference) => void;
-  onToggleConnection: (id: string, enabled: boolean) => void;
+  onToggleChargingAnimation: (enabled: boolean) => void;
   onToggleGlobal: (enabled: boolean) => void;
 }) {
   const { t } = useTranslation();
@@ -622,6 +1063,11 @@ function SettingsModal({
           <Toggle checked={settings.autoReconnect} label={t("settings.autoReconnectToggle")} onChange={onToggleGlobal} />
         </div>
 
+        <div className="setting-row">
+          <div><strong>{t("settings.chargingAnimation")}</strong><span>{t("settings.chargingAnimationDescription")}</span></div>
+          <Toggle checked={settings.chargingAnimation} label={t("settings.chargingAnimationToggle")} onChange={onToggleChargingAnimation} />
+        </div>
+
         <div className="setting-row language-setting">
           <div><strong>{t("settings.language")}</strong><span>{t("settings.languageDescription")}</span></div>
           <select
@@ -635,30 +1081,6 @@ function SettingsModal({
             {APP_LANGUAGES.map(({ code, name }) => <option key={code} value={code}>{name}</option>)}
           </select>
         </div>
-
-        {settings.savedConnections.length > 0 && (
-          <div className="known-device-settings">
-            <span className="settings-caption">{t("settings.knownDevices")}</span>
-            {settings.savedConnections.map((connection) => {
-              const identifier = connection.hardwareSerial || connection.endpoint;
-              const alias = settings.deviceAliases[identifier] || null;
-              return (
-                <div className="setting-device" key={connection.id}>
-                  <div>
-                    <strong>{alias ? `${alias} · ${connection.label || t("common.androidDevice")}` : connection.label || t("common.androidDevice")}</strong>
-                    <span>{connection.endpoint} · {reconnectLabel(connection, t)}</span>
-                  </div>
-                  <Toggle
-                    checked={connection.autoReconnect && !connection.manuallyDisconnected}
-                    disabled={!settings.autoReconnect}
-                    label={t("settings.deviceToggle", { name: connection.label || connection.endpoint })}
-                    onChange={(enabled) => onToggleConnection(connection.id, enabled)}
-                  />
-                </div>
-              );
-            })}
-          </div>
-        )}
 
         <div className="setting-row adb-setting">
           <div><strong>{t("settings.adbExecutable")}</strong><code title={settings.adbPath || adbPath || undefined}>{settings.adbPath || adbPath || t("settings.notDetected")}</code></div>
@@ -682,6 +1104,7 @@ export default function App() {
   const [toast, setToast] = useState<Toast>(null);
   const [modal, setModal] = useState<ModalMode>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [infoTarget, setInfoTarget] = useState<{ serial: string; name: string } | null>(null);
   const [modalEndpoint, setModalEndpoint] = useState("");
 
   const refresh = useCallback(async () => {
@@ -782,9 +1205,15 @@ export default function App() {
     try {
       const result = await operation();
       if (result.settings) setSettings(result.settings);
+      if (result.pendingConnection && key === "modal:pair") {
+        setToast({ type: "success", message: pendingConnectionMessage(t) });
+        await refresh();
+        return result;
+      }
       setToast({ type: "success", message: actionMessage(key, result, t) });
       setModal(null);
       await refresh();
+      return result;
     } catch (error) {
       const message = friendlyError(error, t);
       if (!(key === "modal:pair" && message === "Pairing was cancelled.")) {
@@ -801,15 +1230,16 @@ export default function App() {
   }
 
   async function pairByQr(serviceName: string, password: string) {
-    setBusy("modal:pair-qr");
-    try {
-      await window.adbSuite.pairByQr(serviceName, password);
-      setToast({ type: "success", message: t("status.paired") });
-      setModal(null);
+    const result = await window.adbSuite.pairByQr(serviceName, password);
+    if (result.pendingConnection) {
+      setToast({ type: "success", message: pendingConnectionMessage(t) });
       await refresh();
-    } finally {
-      setBusy(null);
+      return result;
     }
+    setToast({ type: "success", message: t("status.paired") });
+    setModal(null);
+    await refresh();
+    return result;
   }
 
   async function chooseAdb() {
@@ -840,6 +1270,17 @@ export default function App() {
     setBusy("settings:auto-reconnect");
     try {
       setSettings(await window.adbSuite.setAutoReconnect(enabled));
+    } catch (error) {
+      setToast({ type: "error", message: friendlyError(error, t) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function setChargingAnimation(enabled: boolean) {
+    setBusy("settings:charging-animation");
+    try {
+      setSettings(await window.adbSuite.setChargingAnimation(enabled));
     } catch (error) {
       setToast({ type: "error", message: friendlyError(error, t) });
     } finally {
@@ -891,17 +1332,6 @@ export default function App() {
     }
   }
 
-  async function setConnectionAutoReconnect(id: string, enabled: boolean) {
-    setBusy(`settings:${id}`);
-    try {
-      setSettings(await window.adbSuite.setConnectionAutoReconnect(id, enabled));
-    } catch (error) {
-      setToast({ type: "error", message: friendlyError(error, t) });
-    } finally {
-      setBusy(null);
-    }
-  }
-
   async function setDeviceAlias(identifier: string, alias: string) {
     setBusy(`alias:${identifier}`);
     try {
@@ -924,7 +1354,10 @@ export default function App() {
     : toast?.message || (availableUpdate ? t("status.updateAvailable", { version: availableUpdate.latestVersion }) : null) || (loading ? t("status.refreshing") : snapshot.adb.available ? t("status.ready") : t("status.adbRequired"));
 
   return (
-    <div aria-busy={busy !== null} className={`app-shell${busy ? " is-busy" : ""}`}>
+    <div
+      aria-busy={busy !== null && !busy.startsWith("modal:")}
+      className={`app-shell${busy !== null && !busy.startsWith("modal:") ? " is-busy" : ""}`}
+    >
       <header className="topbar">
         <div className="brand">
           <div className="brand-mark" aria-hidden="true">
@@ -984,7 +1417,6 @@ export default function App() {
                 <div><h2>{t("devices.heading")}</h2><span>{t("devices.count", { count: deviceGroups.length })}</span></div>
                 <div className="device-section-tools">
                   <AdbControls adb={snapshot.adb} loading={loading} onRefresh={refresh} onSettings={() => setSettingsOpen(true)} />
-                  <span className="auto-refresh"><span className="pulse" /> {t("devices.live")}</span>
                 </div>
               </div>
 
@@ -1001,6 +1433,7 @@ export default function App() {
                     <DeviceCard
                       alias={settings.deviceAliases[group.identifier] || null}
                       busy={busy}
+                      chargingAnimation={settings.chargingAnimation}
                       group={group}
                       key={group.key}
                       onConnect={(target) => action(`connect:${target.serial}`, () => window.adbSuite.connect(target.serial))}
@@ -1013,6 +1446,7 @@ export default function App() {
                         action(`disconnect:${endpoint}`, () => window.adbSuite.disconnect(endpoint));
                       }}
                       onEnableWireless={(serial) => action(`wifi:${serial}`, () => window.adbSuite.enableWireless(serial))}
+                      onInfo={(target, name) => setInfoTarget({ serial: target.serial, name })}
                       onSetAlias={setDeviceAlias}
                     />
                   ))}
@@ -1126,7 +1560,7 @@ export default function App() {
         </a>
       </footer>
 
-      {busy && (
+      {busy && !busy.startsWith("modal:") && (
         <div aria-hidden="true" className="busy-layer" />
       )}
 
@@ -1153,8 +1587,16 @@ export default function App() {
           onChooseAdb={chooseAdb}
           onClose={() => setSettingsOpen(false)}
           onLanguageChange={changeLanguagePreference}
-          onToggleConnection={setConnectionAutoReconnect}
+          onToggleChargingAnimation={setChargingAnimation}
           onToggleGlobal={setAutoReconnect}
+        />
+      )}
+
+      {infoTarget && (
+        <DeviceInfoModal
+          name={infoTarget.name}
+          serial={infoTarget.serial}
+          onClose={() => setInfoTarget(null)}
         />
       )}
 

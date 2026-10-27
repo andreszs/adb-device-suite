@@ -4,6 +4,29 @@ All notable changes to ADB Device Suite will be documented in this file.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-10-26
+
+### Added
+
+- Connected device cards now provide an Info action with an on-demand, organized overview of identity, Android build, hardware, storage, battery, networking, security and platform features.
+- Connected device cards visualize battery level and charging state, with an optional animated highlight over the charging bar.
+- ADB transport tracking refreshes the device list immediately when USB or Wi-Fi connections change, with periodic polling retained as a fallback.
+
+### Changed
+
+- Successful wireless pairing now returns control immediately while ADB completes its automatic Wi-Fi connection in the background.
+- Device cards use clearer typography, compact battery indicators and borderless action buttons with hover feedback.
+- Settings focuses on global reconnection, charging animation, language and ADB executable preferences; saved devices remain managed from the main window.
+- The main content scrolls independently while the native-style status bar remains fixed and visible.
+- The README now includes concise features, a table of contents, repository badges and updated application screenshots.
+
+### Fixed
+
+- The QR pairing dialog remains responsive while waiting for a device and no longer presents a false connection failure after pairing succeeds.
+- USB attach and detach events are reflected without waiting for the fallback polling interval or requiring a manual refresh.
+- Offline Wi-Fi devices no longer expose actions that imply an active connection.
+- Device information collection tolerates manufacturer-specific command failures and reports unavailable fields without failing the entire dialog.
+
 ## [0.1.2] - 2026-10-26
 
 ### Changed

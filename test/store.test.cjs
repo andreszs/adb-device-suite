@@ -64,3 +64,15 @@ test("language preference defaults to system and persists supported choices", ()
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("charging animation defaults to enabled and persists its preference", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "adb-device-suite-store-"));
+  try {
+    const store = new Store(directory);
+    assert.equal(store.get().chargingAnimation, true);
+    store.setChargingAnimation(false);
+    assert.equal(new Store(directory).get().chargingAnimation, false);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

@@ -1,4 +1,5 @@
 const path = require("node:path");
+const { spawn } = require("node:child_process");
 const { app, BrowserWindow, dialog, ipcMain, nativeTheme, powerMonitor, shell } = require("electron");
 const { AdbService } = require("./adb-service.cjs");
 const { ReconnectManager, metadataFor } = require("./reconnect-manager.cjs");
@@ -10,13 +11,26 @@ if (process.platform === "win32") {
   app.setAppUserModelId("com.andreszs.adbdevicesuite");
 }
 
+const FALLBACK_POLL_INTERVAL_MS = 15_000;
+const DEVICE_PROBE_INTERVAL_MS = 1_000;
+
 let mainWindow;
 let adbService;
 let store;
 let reconnectManager;
 let pollTimer;
 let pollRunning = false;
+let pollQueued = false;
+let reconnectProcessing = false;
+let pendingReconnectSnapshot = null;
 let pairingController = null;
+let deviceTracker = null;
+let deviceTrackerRestartTimer = null;
+let deviceTrackerRefreshTimer = null;
+let deviceProbeTimer = null;
+let deviceProbeRunning = false;
+let lastDeviceTransportList = null;
+let shuttingDown = false;
 
 function createWindow() {
   const savedSettings = store.get();
@@ -97,19 +111,133 @@ function rememberFromSnapshot(endpoint, snapshot, fallback = {}) {
 }
 
 async function pollDevices() {
-  if (pollRunning) return;
+  if (pollRunning) {
+    pollQueued = true;
+    return;
+  }
   pollRunning = true;
   try {
-    let snapshot = await adbService.snapshot();
-    const result = await reconnectManager.process(snapshot);
-    if (result.reconnected) {
-      snapshot = await adbService.snapshot();
-      await reconnectManager.process(snapshot);
-    }
-    sendSnapshot(snapshot);
-    if (result.settingsChanged) sendSettings();
+    do {
+      pollQueued = false;
+      const snapshot = await adbService.snapshot();
+      sendSnapshot(snapshot);
+      queueReconnectProcessing(snapshot);
+    } while (pollQueued);
   } finally {
     pollRunning = false;
+  }
+}
+
+function queueReconnectProcessing(snapshot) {
+  pendingReconnectSnapshot = snapshot;
+  if (reconnectProcessing || shuttingDown) return;
+  reconnectProcessing = true;
+  void (async () => {
+    try {
+      while (pendingReconnectSnapshot && !shuttingDown) {
+        const current = pendingReconnectSnapshot;
+        pendingReconnectSnapshot = null;
+        const result = await reconnectManager.process(current);
+        if (result.settingsChanged) sendSettings();
+        if (result.reconnected) {
+          const refreshed = await adbService.snapshot();
+          sendSnapshot(refreshed);
+          pendingReconnectSnapshot = refreshed;
+        }
+      }
+    } catch {
+      // Device polling must remain independent from reconnect failures.
+    } finally {
+      reconnectProcessing = false;
+      if (pendingReconnectSnapshot && !shuttingDown) queueReconnectProcessing(pendingReconnectSnapshot);
+    }
+  })();
+}
+
+function requestTrackedRefresh() {
+  if (deviceTrackerRefreshTimer) clearTimeout(deviceTrackerRefreshTimer);
+  deviceTrackerRefreshTimer = setTimeout(() => {
+    deviceTrackerRefreshTimer = null;
+    void pollDevices();
+  }, 120);
+}
+
+async function probeDeviceTransports() {
+  if (deviceProbeRunning || shuttingDown) return;
+  deviceProbeRunning = true;
+  try {
+    const { stdout } = await adbService.run(["devices", "-l"], 3_000);
+    const current = stdout.trim();
+    if (lastDeviceTransportList !== null && current !== lastDeviceTransportList) {
+      requestTrackedRefresh();
+    }
+    lastDeviceTransportList = current;
+  } catch {
+    // The 15-second full poll remains the recovery path while ADB restarts.
+  } finally {
+    deviceProbeRunning = false;
+  }
+}
+
+function stopDeviceTracker() {
+  if (deviceTrackerRestartTimer) clearTimeout(deviceTrackerRestartTimer);
+  if (deviceTrackerRefreshTimer) clearTimeout(deviceTrackerRefreshTimer);
+  deviceTrackerRestartTimer = null;
+  deviceTrackerRefreshTimer = null;
+  const tracker = deviceTracker;
+  deviceTracker = null;
+  tracker?.kill();
+}
+
+async function startDeviceTracker() {
+  stopDeviceTracker();
+  lastDeviceTransportList = null;
+  if (shuttingDown) return;
+  try {
+    const executable = await adbService.locate();
+    if (shuttingDown) return;
+    const tracker = spawn(executable, ["track-devices", "-l"], {
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    deviceTracker = tracker;
+    let pending = Buffer.alloc(0);
+
+    tracker.stdout.on("data", (chunk) => {
+      pending = Buffer.concat([pending, chunk]);
+      let changed = false;
+      while (pending.length >= 4) {
+        const prefix = pending.subarray(0, 4).toString("ascii");
+        if (!/^[0-9a-fA-F]{4}$/.test(prefix)) {
+          pending = Buffer.alloc(0);
+          break;
+        }
+        const length = Number.parseInt(prefix, 16);
+        if (pending.length < length + 4) break;
+        pending = pending.subarray(length + 4);
+        changed = true;
+      }
+      if (changed) requestTrackedRefresh();
+    });
+
+    tracker.once("error", () => {});
+    tracker.once("exit", () => {
+      if (deviceTracker !== tracker) return;
+      deviceTracker = null;
+      if (!shuttingDown) {
+        deviceTrackerRestartTimer = setTimeout(() => {
+          deviceTrackerRestartTimer = null;
+          void startDeviceTracker();
+        }, 1_000);
+      }
+    });
+  } catch {
+    if (!shuttingDown) {
+      deviceTrackerRestartTimer = setTimeout(() => {
+        deviceTrackerRestartTimer = null;
+        void startDeviceTracker();
+      }, 2_000);
+    }
   }
 }
 
@@ -117,6 +245,7 @@ function registerIpc() {
   ipcMain.handle("app:get-version", () => app.getVersion());
   ipcMain.handle("app:check-for-updates", () => checkForUpdates(app.getVersion()));
   ipcMain.handle("devices:snapshot", () => adbService.snapshot());
+  ipcMain.handle("devices:info", (_event, serial) => adbService.deviceInfo(serial));
   ipcMain.handle("settings:get", () => currentSettings());
 
   ipcMain.handle("adb:connect", async (_event, endpoint) => {
@@ -146,12 +275,22 @@ function registerIpc() {
         signal: controller.signal,
         onPaired: ({ endpoint: pairingEndpoint }) => _event.sender.send("adb:pairing-progress", {
           method: "code",
-          phase: "connecting",
+          phase: "pending",
           pairingEndpoint,
-          connectionTimeoutSeconds: 20,
+          connectionTimeoutSeconds: 0,
         }),
       });
       const snapshot = await adbService.snapshot();
+      if (result.pendingConnection) {
+        _event.sender.send("adb:pairing-progress", {
+          method: "code",
+          phase: "pending",
+          pairingEndpoint: result.pairingEndpoint,
+          connectionTimeoutSeconds: 0,
+        });
+        sendSnapshot(snapshot);
+        return { ...result, settings: currentSettings() };
+      }
       rememberFromSnapshot(result.endpoint, snapshot, { mode: "tls" });
       sendSnapshot(snapshot);
       return { ...result, settings: currentSettings() };
@@ -169,12 +308,22 @@ function registerIpc() {
         signal: controller.signal,
         onPaired: ({ endpoint }) => event.sender.send("adb:pairing-progress", {
           method: "qr",
-          phase: "connecting",
+          phase: "pending",
           pairingEndpoint: endpoint,
-          connectionTimeoutSeconds: 20,
+          connectionTimeoutSeconds: 0,
         }),
       });
       const snapshot = await adbService.snapshot();
+      if (result.pendingConnection) {
+        event.sender.send("adb:pairing-progress", {
+          method: "qr",
+          phase: "pending",
+          pairingEndpoint: result.pairingEndpoint,
+          connectionTimeoutSeconds: 0,
+        });
+        sendSnapshot(snapshot);
+        return { ...result, settings: currentSettings() };
+      }
       rememberFromSnapshot(result.endpoint, snapshot, { mode: "tls" });
       sendSnapshot(snapshot);
       return { ...result, settings: currentSettings() };
@@ -225,6 +374,7 @@ function registerIpc() {
       throw new Error("The selected file is not a working ADB executable.");
     }
     store.setAdbPath(selectedPath);
+    void startDeviceTracker();
     await pollDevices();
     return { settings: currentSettings(), snapshot };
   });
@@ -232,6 +382,12 @@ function registerIpc() {
   ipcMain.handle("settings:set-auto-reconnect", (_event, enabled) => {
     store.setAutoReconnect(enabled);
     reconnectManager.wake();
+    sendSettings();
+    return currentSettings();
+  });
+
+  ipcMain.handle("settings:set-charging-animation", (_event, enabled) => {
+    store.setChargingAnimation(enabled);
     sendSettings();
     return currentSettings();
   });
@@ -287,8 +443,11 @@ app.whenReady().then(() => {
   reconnectManager = new ReconnectManager(adbService, store, sendSettings);
   registerIpc();
   createWindow();
-  pollTimer = setInterval(pollDevices, 4_000);
+  pollTimer = setInterval(pollDevices, FALLBACK_POLL_INTERVAL_MS);
+  deviceProbeTimer = setInterval(probeDeviceTransports, DEVICE_PROBE_INTERVAL_MS);
   pollDevices();
+  void probeDeviceTransports();
+  void startDeviceTracker();
 
   powerMonitor.on("resume", () => {
     reconnectManager.wake();
@@ -301,7 +460,13 @@ app.whenReady().then(() => {
 });
 
 app.on("window-all-closed", () => {
-  if (pollTimer) clearInterval(pollTimer);
-  pairingController?.abort();
   if (process.platform !== "darwin") app.quit();
+});
+
+app.on("before-quit", () => {
+  shuttingDown = true;
+  if (pollTimer) clearInterval(pollTimer);
+  if (deviceProbeTimer) clearInterval(deviceProbeTimer);
+  stopDeviceTracker();
+  pairingController?.abort();
 });

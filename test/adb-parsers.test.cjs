@@ -2,11 +2,18 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   AdbService,
+  parseBatteryInfo,
+  parseCpuInfo,
   parseDevices,
   parseIpAddress,
   parseIpAddresses,
   parseMdnsServices,
+  parseNetworkInterfaces,
+  parseOrientation,
   parseProperties,
+  parseScreenInfo,
+  parseStorageInfo,
+  parseSettingBoolean,
   validateEndpoint,
 } = require("../electron/adb-service.cjs");
 
@@ -39,6 +46,46 @@ test("parseProperties reads Android getprop output", () => {
 `);
   assert.equal(properties["ro.product.model"], "Pixel 9");
   assert.equal(properties["ro.build.version.sdk"], "36");
+});
+
+test("device information parsers normalize battery, screen, storage and network output", () => {
+  assert.deepEqual(parseBatteryInfo(`AC powered: false
+USB powered: true
+Wireless powered: false
+status: 2
+health: 2
+level: 87
+voltage: 4210
+temperature: 315
+technology: Li-ion`), {
+    level: 87,
+    status: "charging",
+    health: "good",
+    temperatureC: 31.5,
+    voltageMv: 4210,
+    technology: "Li-ion",
+    sources: ["USB"],
+  });
+  assert.deepEqual(parseScreenInfo("Physical size: 1080x2280\nOverride size: 1080x2160", "Physical density: 420"), {
+    resolution: "1080x2160",
+    densityDpi: 420,
+  });
+  assert.deepEqual(parseStorageInfo(`Filesystem 1K-blocks Used Available Use% Mounted on
+/dev/block/dm-8 115000000 23000000 92000000 20% /data`), {
+    totalBytes: 117760000000,
+    usedBytes: 23552000000,
+    availableBytes: 94208000000,
+    usedPercent: 20,
+  });
+  assert.deepEqual(parseNetworkInterfaces(`1: lo    inet 127.0.0.1/8 scope host lo
+12: wlan0    inet 192.168.0.6/24 brd 192.168.0.255 scope global wlan0`), [
+    { name: "wlan0", address: "192.168.0.6/24" },
+  ]);
+  assert.deepEqual(parseCpuInfo("processor: 0\nprocessor: 1\nHardware: MT6768"), { model: "MT6768", cores: 2 });
+  assert.deepEqual(parseOrientation("SurfaceOrientation: 1"), { orientation: "landscape", rotation: 1 });
+  assert.equal(parseSettingBoolean("1\n"), true);
+  assert.equal(parseSettingBoolean("0\n"), false);
+  assert.equal(parseSettingBoolean("null\n"), null);
 });
 
 test("parseIpAddress accepts route and interface formats", () => {
@@ -89,7 +136,7 @@ test("validateEndpoint normalizes safe endpoints and rejects invalid ports", () 
   assert.throws(() => validateEndpoint("192.168.1.2:99999"), /between/);
 });
 
-test("pairing by code waits for the connection service instead of returning halfway", async () => {
+test("pairing by code accepts a device that ADB already auto-connected", async () => {
   const adb = new AdbService();
   const calls = [];
   const progress = [];
@@ -98,7 +145,13 @@ test("pairing by code waits for the connection service instead of returning half
     if (args[0] === "pair") {
       return { stdout: "Successfully paired to 192.168.1.87:46305", stderr: "" };
     }
-    if (args[0] === "devices") return { stdout: "List of devices attached", stderr: "" };
+    if (args[0] === "devices") {
+      return {
+        stdout: `List of devices attached
+192.168.1.87:39421 device product:test model:Test device:test transport_id:1`,
+        stderr: "",
+      };
+    }
     if (args[0] === "mdns") {
       return {
         stdout: `List of discovered mdns services
@@ -106,7 +159,6 @@ adb-R9MNA00VMTJ-random _adb-tls-connect._tcp 192.168.1.87:39421`,
         stderr: "",
       };
     }
-    if (args[0] === "connect") return { stdout: "connected to 192.168.1.87:39421", stderr: "" };
     return { stdout: "", stderr: "" };
   };
 
@@ -117,7 +169,53 @@ adb-R9MNA00VMTJ-random _adb-tls-connect._tcp 192.168.1.87:39421`,
   assert.equal(result.pairingEndpoint, "192.168.1.87:46305");
   assert.equal(result.endpoint, "192.168.1.87:39421");
   assert.deepEqual(progress, [{ endpoint: "192.168.1.87:46305" }]);
-  assert.deepEqual(calls.map((args) => args[0]), ["pair", "devices", "mdns", "connect"]);
+  assert.deepEqual(calls.map((args) => args[0]), ["pair", "devices", "mdns"]);
+});
+
+test("pairing recognizes devices that ADB auto-connects under their mDNS service name", async () => {
+  const adb = new AdbService();
+  const calls = [];
+  adb.run = async (args) => {
+    calls.push(args);
+    if (args[0] === "pair") return { stdout: "Successfully paired to 192.168.0.32:37123", stderr: "" };
+    if (args[0] === "devices") {
+      return {
+        stdout: `List of devices attached
+adb-150b17f0-dsJ1nI._adb-tls-connect._tcp device product:ginkgo model:Redmi_Note_8 device:ginkgo transport_id:25`,
+        stderr: "",
+      };
+    }
+    if (args[0] === "mdns") {
+      return {
+        stdout: `List of discovered mdns services
+adb-150b17f0-dsJ1nI _adb-tls-connect._tcp 192.168.0.32:43461`,
+        stderr: "",
+      };
+    }
+    return { stdout: "", stderr: "" };
+  };
+
+  const result = await adb.pair("192.168.0.32:37123", "123456");
+
+  assert.equal(result.endpoint, "adb-150b17f0-dsJ1nI._adb-tls-connect._tcp");
+  assert.equal(result.pendingConnection, undefined);
+  assert.equal(calls.some((args) => args[0] === "connect"), false);
+});
+
+test("pairing immediately reports a pending automatic connection instead of waiting", async () => {
+  const adb = new AdbService();
+  adb.run = async (args) => {
+    if (args[0] === "pair") return { stdout: "Successfully paired to 192.168.0.32:37123", stderr: "" };
+    if (args[0] === "devices") return { stdout: "List of devices attached", stderr: "" };
+    if (args[0] === "mdns") return { stdout: "List of discovered mdns services", stderr: "" };
+    return { stdout: "", stderr: "" };
+  };
+
+  const result = await adb.pair("192.168.0.32:37123", "123456");
+
+  assert.equal(result.pendingConnection, true);
+  assert.equal(result.endpoint, null);
+  assert.match(result.message, /connect automatically/i);
 });
 
 test("pairByQr waits for the requested QR service and pairs with its generated secret", async () => {
@@ -142,8 +240,15 @@ studio-0123456789 _adb-tls-pairing._tcp 192.168.1.41:37123`,
       paired = true;
       return { stdout: "Successfully paired to 192.168.1.41:37123", stderr: "" };
     }
-    if (args[0] === "devices") return { stdout: "List of devices attached", stderr: "" };
-    if (args[0] === "connect") return { stdout: "connected to 192.168.1.41:41521", stderr: "" };
+    if (args[0] === "devices") {
+      return {
+        stdout: paired
+          ? `List of devices attached
+192.168.1.41:41521 device product:test model:Test device:test transport_id:2`
+          : "List of devices attached",
+        stderr: "",
+      };
+    }
     return { stdout: "", stderr: "" };
   };
 
@@ -155,7 +260,7 @@ studio-0123456789 _adb-tls-pairing._tcp 192.168.1.41:37123`,
   assert.equal(result.pairingEndpoint, "192.168.1.41:37123");
   assert.equal(result.endpoint, "192.168.1.41:41521");
   assert.deepEqual(progress, [{ endpoint: "192.168.1.41:37123", calls: 2 }]);
-  assert.deepEqual(calls.at(-1), ["connect", "192.168.1.41:41521"]);
+  assert.equal(calls.some((args) => args[0] === "connect"), false);
 });
 
 test("pairByQr rejects malformed credentials before running ADB", async () => {

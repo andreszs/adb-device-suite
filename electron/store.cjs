@@ -5,6 +5,7 @@ const { normalizeLanguagePreference } = require("./language.cjs");
 const DEFAULT_DATA = Object.freeze({
   adbPath: null,
   autoReconnect: true,
+  chargingAnimation: true,
   deviceAliases: {},
   savedConnections: [],
   themePreference: "light",
@@ -59,6 +60,7 @@ class Store {
         ...DEFAULT_DATA,
         ...parsed,
         autoReconnect: parsed.autoReconnect !== false,
+        chargingAnimation: parsed.chargingAnimation !== false,
         deviceAliases: normalizeAliases(parsed.deviceAliases),
         savedConnections: Array.isArray(parsed.savedConnections)
           ? parsed.savedConnections.map(normalizeConnection).filter(Boolean)
@@ -87,6 +89,12 @@ class Store {
 
   setAutoReconnect(enabled) {
     this.data.autoReconnect = Boolean(enabled);
+    this.#write();
+    return this.get();
+  }
+
+  setChargingAnimation(enabled) {
+    this.data.chargingAnimation = Boolean(enabled);
     this.#write();
     return this.get();
   }

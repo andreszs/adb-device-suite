@@ -44,6 +44,101 @@ function parseProperties(output) {
   return properties;
 }
 
+function parseKeyValueLines(output) {
+  const values = {};
+  for (const line of String(output || "").split(/\r?\n/)) {
+    const separator = line.indexOf(":");
+    if (separator < 0) continue;
+    values[line.slice(0, separator).trim().toLowerCase()] = line.slice(separator + 1).trim();
+  }
+  return values;
+}
+
+function parseBatteryInfo(output) {
+  const values = parseKeyValueLines(output);
+  const statusNames = { 1: "unknown", 2: "charging", 3: "discharging", 4: "notCharging", 5: "full" };
+  const healthNames = { 1: "unknown", 2: "good", 3: "overheat", 4: "dead", 5: "overVoltage", 6: "failure", 7: "cold" };
+  const number = (key, divisor = 1) => {
+    const value = Number(values[key]);
+    return Number.isFinite(value) ? value / divisor : null;
+  };
+  const enabled = (key) => values[key] === "true";
+  const sources = [];
+  if (enabled("ac powered")) sources.push("AC");
+  if (enabled("usb powered")) sources.push("USB");
+  if (enabled("wireless powered")) sources.push("Wireless");
+  const statusCode = number("status");
+  const healthCode = number("health");
+  return {
+    level: number("level"),
+    status: statusNames[statusCode] || "unknown",
+    health: healthNames[healthCode] || "unknown",
+    temperatureC: number("temperature", 10),
+    voltageMv: number("voltage"),
+    technology: values.technology || null,
+    sources,
+  };
+}
+
+function parseScreenInfo(sizeOutput, densityOutput) {
+  const physicalSize = String(sizeOutput || "").match(/Physical size:\s*(\d+x\d+)/i)?.[1] || null;
+  const overrideSize = String(sizeOutput || "").match(/Override size:\s*(\d+x\d+)/i)?.[1] || null;
+  const physicalDensity = Number(String(densityOutput || "").match(/Physical density:\s*(\d+)/i)?.[1]);
+  const overrideDensity = Number(String(densityOutput || "").match(/Override density:\s*(\d+)/i)?.[1]);
+  return {
+    resolution: overrideSize || physicalSize,
+    densityDpi: Number.isFinite(overrideDensity) ? overrideDensity : Number.isFinite(physicalDensity) ? physicalDensity : null,
+  };
+}
+
+function parseStorageInfo(output) {
+  const lines = String(output || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const fields = lines.at(-1)?.split(/\s+/) || [];
+  if (fields.length < 6) return { totalBytes: null, usedBytes: null, availableBytes: null, usedPercent: null };
+  const totalKb = Number(fields.at(-5));
+  const usedKb = Number(fields.at(-4));
+  const availableKb = Number(fields.at(-3));
+  const usedPercent = Number(String(fields.at(-2)).replace("%", ""));
+  return {
+    totalBytes: Number.isFinite(totalKb) ? totalKb * 1024 : null,
+    usedBytes: Number.isFinite(usedKb) ? usedKb * 1024 : null,
+    availableBytes: Number.isFinite(availableKb) ? availableKb * 1024 : null,
+    usedPercent: Number.isFinite(usedPercent) ? usedPercent : null,
+  };
+}
+
+function parseNetworkInterfaces(output) {
+  const interfaces = [];
+  for (const line of String(output || "").split(/\r?\n/)) {
+    const match = line.match(/^\s*\d+:\s+([^\s:@]+)(?:@[^\s:]+)?\s+inet\s+(\d{1,3}(?:\.\d{1,3}){3}\/\d+)/);
+    if (match && !match[2].startsWith("127.")) interfaces.push({ name: match[1], address: match[2] });
+  }
+  return interfaces;
+}
+
+function parseCpuInfo(output) {
+  const text = String(output || "");
+  const processors = text.match(/^processor\s*:/gim)?.length || 0;
+  const model = text.match(/^Hardware\s*:\s*(.+)$/im)?.[1]?.trim()
+    || text.match(/^model name\s*:\s*(.+)$/im)?.[1]?.trim()
+    || text.match(/^Processor\s*:\s*(.+)$/m)?.[1]?.trim()
+    || null;
+  return { model, cores: processors || null };
+}
+
+function parseOrientation(output) {
+  const rotation = Number(String(output || "").match(/SurfaceOrientation:\s*(\d+)/i)?.[1]);
+  if (!Number.isFinite(rotation)) return { orientation: null, rotation: null };
+  return { orientation: rotation % 2 === 0 ? "portrait" : "landscape", rotation };
+}
+
+function parseSettingBoolean(output) {
+  const normalized = String(output || "").trim().toLowerCase();
+  if (["1", "true", "enabled", "on"].includes(normalized)) return true;
+  if (["0", "false", "disabled", "off"].includes(normalized)) return false;
+  return null;
+}
+
 function parseIpAddress(output) {
   return parseIpAddresses(output)[0] || null;
 }
@@ -157,6 +252,13 @@ function endpointHost(endpoint) {
   return match?.[1] || null;
 }
 
+function mdnsSerialMatchesService(serial, service) {
+  if (!serial || !service?.serviceName || !service?.serviceType) return false;
+  const normalizedSerial = String(serial).replace(/\.$/, "");
+  const qualifiedService = `${service.serviceName}.${service.serviceType}`.replace(/\.$/, "");
+  return normalizedSerial === qualifiedService;
+}
+
 function waitForDelay(delay, signal) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
@@ -261,16 +363,18 @@ class AdbService {
     const cached = this.metadataCache.get(device.serial);
     if (cached && Date.now() - cached.at < 30_000) return cached.value;
 
-    const [propertiesResult, routeResult, addressesResult] = await Promise.allSettled([
+    const [propertiesResult, routeResult, addressesResult, batteryResult] = await Promise.allSettled([
       this.run(["-s", device.serial, "shell", "getprop"], 7_000),
       this.run(["-s", device.serial, "shell", "ip", "route"], 7_000),
       this.run(["-s", device.serial, "shell", "ip", "-o", "-4", "addr", "show"], 7_000),
+      this.run(["-s", device.serial, "shell", "dumpsys", "battery"], 7_000),
     ]);
     const properties = propertiesResult.status === "fulfilled"
       ? parseProperties(propertiesResult.value.stdout)
       : {};
     const routeOutput = routeResult.status === "fulfilled" ? routeResult.value.stdout : "";
     const addressesOutput = addressesResult.status === "fulfilled" ? addressesResult.value.stdout : "";
+    const battery = batteryResult.status === "fulfilled" ? parseBatteryInfo(batteryResult.value.stdout) : null;
     const detectedAddresses = parseIpAddresses(addressesOutput, routeOutput);
     const connectedAddress = device.connection === "wifi"
       ? device.serial.match(/^(\d{1,3}(?:\.\d{1,3}){3}):\d+$/)?.[1] || null
@@ -285,6 +389,7 @@ class AdbService {
       hardwareSerial: properties["ro.serialno"] || properties["ro.boot.serialno"] || null,
       ipAddress,
       ipAddresses,
+      battery,
     };
     this.metadataCache.set(device.serial, { at: Date.now(), value });
     return value;
@@ -328,6 +433,113 @@ class AdbService {
     }
   }
 
+  async deviceInfo(rawSerial) {
+    const serial = typeof rawSerial === "string" ? rawSerial.trim() : "";
+    if (!serial || serial.length > 300 || /[\u0000-\u001f\s]/.test(serial)) throw new Error("Invalid device.");
+    const { stdout: state } = await this.run(["-s", serial, "get-state"], 5_000);
+    if (state.trim() !== "device") throw new Error("The device is not connected or authorized.");
+
+    const commands = {
+      properties: ["getprop"],
+      battery: ["dumpsys", "battery"],
+      screenSize: ["wm", "size"],
+      screenDensity: ["wm", "density"],
+      storage: ["df", "-k", "/data"],
+      memory: ["cat", "/proc/meminfo"],
+      cpuInfo: ["cat", "/proc/cpuinfo"],
+      kernel: ["uname", "-a"],
+      uptime: ["cat", "/proc/uptime"],
+      addresses: ["ip", "-o", "-4", "addr", "show"],
+      routes: ["ip", "route"],
+      selinux: ["getenforce"],
+      orientation: ["dumpsys", "input"],
+      developerOptions: ["settings", "get", "global", "development_settings_enabled"],
+      wifiOn: ["settings", "get", "global", "wifi_on"],
+      airplaneMode: ["settings", "get", "global", "airplane_mode_on"],
+      features: ["pm", "list", "features"],
+    };
+    const entries = await Promise.all(Object.entries(commands).map(async ([key, args]) => {
+      try {
+        const { stdout } = await this.run(["-s", serial, "shell", ...args], 7_000);
+        return [key, stdout];
+      } catch {
+        return [key, ""];
+      }
+    }));
+    const output = Object.fromEntries(entries);
+    const properties = parseProperties(output.properties);
+    const screen = parseScreenInfo(output.screenSize, output.screenDensity);
+    const memTotalKb = Number(String(output.memory).match(/^MemTotal:\s+(\d+)\s+kB/im)?.[1]);
+    const memAvailableKb = Number(String(output.memory).match(/^MemAvailable:\s+(\d+)\s+kB/im)?.[1]);
+    const uptimeSeconds = Number(String(output.uptime).match(/^([\d.]+)/)?.[1]);
+    const cpu = parseCpuInfo(output.cpuInfo);
+    const orientation = parseOrientation(output.orientation);
+    const routes = String(output.routes).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const features = String(output.features).split(/\r?\n/)
+      .map((line) => line.trim().replace(/^feature:/, ""))
+      .filter(Boolean)
+      .sort((left, right) => left.localeCompare(right));
+
+    return {
+      serial,
+      identity: {
+        brand: properties["ro.product.brand"] || null,
+        manufacturer: properties["ro.product.manufacturer"] || null,
+        model: properties["ro.product.model"] || null,
+        product: properties["ro.product.name"] || null,
+        device: properties["ro.product.device"] || null,
+        hardwareSerial: properties["ro.serialno"] || properties["ro.boot.serialno"] || null,
+      },
+      system: {
+        androidVersion: properties["ro.build.version.release"] || null,
+        sdk: properties["ro.build.version.sdk"] || null,
+        skinName: properties["ro.miui.ui.version.name"] ? "MIUI"
+          : properties["ro.build.version.opporom"] ? "ColorOS"
+            : properties["ro.build.version.emui"] ? "EMUI"
+              : null,
+        skinVersion: properties["ro.miui.ui.version.name"] || properties["ro.build.version.opporom"] || properties["ro.build.version.emui"] || null,
+        securityPatch: properties["ro.build.version.security_patch"] || null,
+        buildId: properties["ro.build.version.incremental"] || properties["ro.build.id"] || null,
+        buildType: properties["ro.build.type"] || null,
+        buildTags: properties["ro.build.tags"] || null,
+        buildFingerprint: properties["ro.build.fingerprint"] || null,
+        kernel: output.kernel || null,
+        uptimeSeconds: Number.isFinite(uptimeSeconds) ? uptimeSeconds : null,
+        locale: properties["persist.sys.locale"] || properties["ro.product.locale"] || null,
+        timeZone: properties["persist.sys.timezone"] || null,
+        bootReason: properties["ro.boot.bootreason"] || properties["sys.boot.reason"] || null,
+        developerOptions: parseSettingBoolean(output.developerOptions),
+      },
+      hardware: {
+        platform: properties["ro.board.platform"] || properties["ro.hardware"] || null,
+        cpuModel: cpu.model,
+        cpuCores: cpu.cores,
+        cpuAbis: (properties["ro.product.cpu.abilist"] || "").split(",").filter(Boolean),
+        ramTotalBytes: Number.isFinite(memTotalKb) ? memTotalKb * 1024 : null,
+        ramAvailableBytes: Number.isFinite(memAvailableKb) ? memAvailableKb * 1024 : null,
+        screen: { ...screen, ...orientation },
+        storage: parseStorageInfo(output.storage),
+      },
+      battery: parseBatteryInfo(output.battery),
+      network: {
+        interfaces: parseNetworkInterfaces(output.addresses),
+        routes,
+        wifiEnabled: parseSettingBoolean(output.wifiOn),
+        airplaneMode: parseSettingBoolean(output.airplaneMode),
+      },
+      security: {
+        encryption: properties["ro.crypto.state"] || null,
+        encryptionType: properties["ro.crypto.type"] || null,
+        verifiedBoot: properties["ro.boot.verifiedbootstate"] || null,
+        bootloader: properties["ro.boot.vbmeta.device_state"]
+          || (properties["ro.boot.flash.locked"] === "1" ? "locked" : properties["ro.boot.flash.locked"] === "0" ? "unlocked" : null),
+        selinux: output.selinux || null,
+        adbSecure: parseSettingBoolean(properties["ro.adb.secure"]),
+      },
+      features,
+    };
+  }
+
   async connect(rawEndpoint) {
     const endpoint = validateEndpoint(rawEndpoint);
     const { stdout, stderr } = await this.run(["connect", endpoint], 15_000);
@@ -359,11 +571,7 @@ class AdbService {
     const pairingResult = await this.#pairWithSecret(rawEndpoint, code);
     if (options.signal?.aborted) throw new Error("Pairing was cancelled.");
     options.onPaired?.({ endpoint: pairingResult.endpoint });
-    const connectionResult = await this.#connectAfterPairing(
-      pairingResult.endpoint,
-      options.signal,
-      options.connectionTimeout,
-    );
+    const connectionResult = await this.#connectAfterPairing(pairingResult.endpoint, options.signal);
     return {
       ...connectionResult,
       pairingEndpoint: pairingResult.endpoint,
@@ -399,37 +607,30 @@ class AdbService {
     throw new Error("No Android device responded to the QR code before it expired.");
   }
 
-  async #connectAfterPairing(pairingEndpoint, signal, timeout = 20_000) {
+  async #connectAfterPairing(pairingEndpoint, signal) {
     const host = endpointHost(pairingEndpoint);
-    const deadline = Date.now() + timeout;
-
-    while (Date.now() < deadline) {
-      if (signal?.aborted) throw new Error("Pairing was cancelled.");
-      const [{ stdout: devicesOutput }, mdnsResult] = await Promise.all([
-        this.run(["devices", "-l"], 8_000),
-        this.run(["mdns", "services"], 5_000).catch(() => ({ stdout: "" })),
-      ]);
-      const connectedDevice = parseDevices(devicesOutput).find((device) => (
-        device.connection === "wifi" && endpointHost(device.serial) === host && device.state === "device"
-      ));
-      if (connectedDevice) {
-        return { endpoint: connectedDevice.serial, message: `Connected to ${connectedDevice.serial}` };
-      }
-
-      const connectionService = parseMdnsServices(mdnsResult.stdout).find((item) => (
-        item.type === "connect" && endpointHost(item.endpoint) === host
-      ));
-      if (connectionService) {
-        try {
-          return await this.connect(connectionService.endpoint);
-        } catch {
-          // Keep retrying until the connection deadline.
-        }
-      }
-      await waitForDelay(Math.min(750, deadline - Date.now()), signal);
+    if (signal?.aborted) throw new Error("Pairing was cancelled.");
+    const [{ stdout: devicesOutput }, mdnsResult] = await Promise.all([
+      this.run(["devices", "-l"], 8_000),
+      this.run(["mdns", "services"], 5_000).catch(() => ({ stdout: "" })),
+    ]);
+    const connectionServices = parseMdnsServices(mdnsResult.stdout).filter((item) => (
+      item.type === "connect" && endpointHost(item.endpoint) === host
+    ));
+    const connectedDevice = parseDevices(devicesOutput).find((device) => (
+      device.connection === "wifi"
+      && device.state === "device"
+      && (endpointHost(device.serial) === host || connectionServices.some((service) => mdnsSerialMatchesService(device.serial, service)))
+    ));
+    if (connectedDevice) {
+      return { endpoint: connectedDevice.serial, message: `Connected to ${connectedDevice.serial}` };
     }
 
-    throw new Error("Pairing succeeded, but ADB could not connect to the wireless debugging port within 20 seconds.");
+    return {
+      endpoint: null,
+      pendingConnection: true,
+      message: "Pairing succeeded. Android will connect automatically when its wireless debugging service is ready.",
+    };
   }
 
   async enableWireless(serial) {
@@ -467,9 +668,16 @@ class AdbService {
 module.exports = {
   AdbService,
   parseDevices,
+  parseBatteryInfo,
+  parseCpuInfo,
   parseIpAddress,
   parseIpAddresses,
   parseMdnsServices,
+  parseNetworkInterfaces,
+  parseOrientation,
   parseProperties,
+  parseScreenInfo,
+  parseStorageInfo,
+  parseSettingBoolean,
   validateEndpoint,
 };

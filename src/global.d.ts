@@ -6,6 +6,7 @@ declare global {
       getAppVersion: () => Promise<string>;
       checkForUpdates: () => Promise<UpdateCheckResult>;
       getSnapshot: () => Promise<AdbSnapshot>;
+      getDeviceInfo: (serial: string) => Promise<DeviceInfo>;
       getSettings: () => Promise<AppSettings>;
       connect: (endpoint: string) => Promise<ActionResult>;
       disconnect: (endpoint: string) => Promise<ActionResult>;
@@ -16,6 +17,7 @@ declare global {
       restartServer: () => Promise<ActionResult>;
       chooseAdb: () => Promise<{ settings: AppSettings; snapshot: AdbSnapshot } | null>;
       setAutoReconnect: (enabled: boolean) => Promise<AppSettings>;
+      setChargingAnimation: (enabled: boolean) => Promise<AppSettings>;
       setThemePreference: (themePreference: "light" | "dark" | "auto") => Promise<AppSettings>;
       setLanguagePreference: (languagePreference: LanguagePreference) => Promise<{ settings: AppSettings; resolvedLanguage: AppLanguage }>;
       setConnectionAutoReconnect: (id: string, enabled: boolean) => Promise<AppSettings>;
@@ -30,7 +32,7 @@ declare global {
 
   interface PairingProgress {
     method: "code" | "qr";
-    phase: "connecting";
+    phase: "connecting" | "pending";
     pairingEndpoint: string;
     connectionTimeoutSeconds: number;
   }
@@ -49,6 +51,74 @@ declare global {
     hardwareSerial?: string | null;
     ipAddress?: string | null;
     ipAddresses?: string[];
+    battery?: {
+      level: number | null;
+      status: "unknown" | "charging" | "discharging" | "notCharging" | "full";
+      sources: string[];
+    } | null;
+  }
+
+  interface DeviceInfo {
+    serial: string;
+    identity: {
+      brand: string | null;
+      manufacturer: string | null;
+      model: string | null;
+      product: string | null;
+      device: string | null;
+      hardwareSerial: string | null;
+    };
+    system: {
+      androidVersion: string | null;
+      sdk: string | null;
+      skinName: string | null;
+      skinVersion: string | null;
+      securityPatch: string | null;
+      buildId: string | null;
+      buildType: string | null;
+      buildTags: string | null;
+      buildFingerprint: string | null;
+      kernel: string | null;
+      uptimeSeconds: number | null;
+      locale: string | null;
+      timeZone: string | null;
+      bootReason: string | null;
+      developerOptions: boolean | null;
+    };
+    hardware: {
+      platform: string | null;
+      cpuModel: string | null;
+      cpuCores: number | null;
+      cpuAbis: string[];
+      ramTotalBytes: number | null;
+      ramAvailableBytes: number | null;
+      screen: { resolution: string | null; densityDpi: number | null; orientation: "portrait" | "landscape" | null; rotation: number | null };
+      storage: { totalBytes: number | null; usedBytes: number | null; availableBytes: number | null; usedPercent: number | null };
+    };
+    battery: {
+      level: number | null;
+      status: "unknown" | "charging" | "discharging" | "notCharging" | "full";
+      health: "unknown" | "good" | "overheat" | "dead" | "overVoltage" | "failure" | "cold";
+      temperatureC: number | null;
+      voltageMv: number | null;
+      technology: string | null;
+      sources: string[];
+    };
+    network: {
+      interfaces: Array<{ name: string; address: string }>;
+      routes: string[];
+      wifiEnabled: boolean | null;
+      airplaneMode: boolean | null;
+    };
+    security: {
+      encryption: string | null;
+      encryptionType: string | null;
+      verifiedBoot: string | null;
+      bootloader: string | null;
+      selinux: string | null;
+      adbSecure: boolean | null;
+    };
+    features: string[];
   }
 
   interface UpdateCheckResult {
@@ -100,6 +170,7 @@ declare global {
   interface AppSettings {
     adbPath: string | null;
     autoReconnect: boolean;
+    chargingAnimation: boolean;
     deviceAliases: Record<string, string>;
     savedConnections: SavedConnection[];
     themePreference: "light" | "dark" | "auto";
@@ -112,6 +183,7 @@ declare global {
   interface ActionResult {
     endpoint?: string;
     message: string;
+    pendingConnection?: boolean;
     settings?: AppSettings;
   }
 }
