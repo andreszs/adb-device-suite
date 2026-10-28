@@ -86,6 +86,20 @@ function validateSerial(rawSerial) {
   return serial;
 }
 
+function normalizeDeviceName(value) {
+  const normalized = String(value || "").trim();
+  return normalized && !/^(?:null|undefined)$/i.test(normalized) ? normalized : null;
+}
+
+function selectDeviceName(model, configuredName, ...fallbackNames) {
+  const normalizedModel = normalizeDeviceName(model)?.toLowerCase() || null;
+  const configured = normalizeDeviceName(configuredName);
+  const fallbacks = fallbackNames.map(normalizeDeviceName).filter(Boolean);
+  if (configured && configured.toLowerCase() !== normalizedModel) return configured;
+  const descriptiveFallback = fallbacks.find((name) => name.toLowerCase() !== normalizedModel);
+  return descriptiveFallback || configured || fallbacks[0] || null;
+}
+
 function parseScreenInfo(sizeOutput, densityOutput) {
   const physicalSize = String(sizeOutput || "").match(/Physical size:\s*(\d+x\d+)/i)?.[1] || null;
   const overrideSize = String(sizeOutput || "").match(/Override size:\s*(\d+x\d+)/i)?.[1] || null;
@@ -373,10 +387,20 @@ class AdbService {
     const cached = this.metadataCache.get(device.serial);
     if (cached && Date.now() - cached.at < 30_000) return cached.value;
 
-    const [propertiesResult, routeResult, addressesResult] = await Promise.allSettled([
+    const [
+      propertiesResult,
+      routeResult,
+      addressesResult,
+      deviceNameResult,
+      secureBluetoothNameResult,
+      globalBluetoothNameResult,
+    ] = await Promise.allSettled([
       this.run(["-s", device.serial, "shell", "getprop"], 7_000),
       this.run(["-s", device.serial, "shell", "ip", "route"], 7_000),
       this.run(["-s", device.serial, "shell", "ip", "-o", "-4", "addr", "show"], 7_000),
+      this.run(["-s", device.serial, "shell", "settings", "get", "global", "device_name"], 4_000),
+      this.run(["-s", device.serial, "shell", "settings", "get", "secure", "bluetooth_name"], 4_000),
+      this.run(["-s", device.serial, "shell", "settings", "get", "global", "bluetooth_name"], 4_000),
     ]);
     const properties = propertiesResult.status === "fulfilled"
       ? parseProperties(propertiesResult.value.stdout)
@@ -389,9 +413,17 @@ class AdbService {
       : null;
     const ipAddresses = [...new Set([connectedAddress, ...detectedAddresses].filter(Boolean))];
     const ipAddress = ipAddresses[0] || null;
+    const model = properties["ro.product.model"] || device.model || null;
+    const deviceName = selectDeviceName(
+      model,
+      deviceNameResult.status === "fulfilled" ? deviceNameResult.value.stdout : null,
+      secureBluetoothNameResult.status === "fulfilled" ? secureBluetoothNameResult.value.stdout : null,
+      globalBluetoothNameResult.status === "fulfilled" ? globalBluetoothNameResult.value.stdout : null,
+    );
     const value = {
       manufacturer: properties["ro.product.manufacturer"] || null,
-      model: properties["ro.product.model"] || device.model || null,
+      model,
+      deviceName,
       androidVersion: properties["ro.build.version.release"] || null,
       sdk: properties["ro.build.version.sdk"] || null,
       hardwareSerial: properties["ro.serialno"] || properties["ro.boot.serialno"] || null,
@@ -699,6 +731,7 @@ class AdbService {
           value: {
             manufacturer: device.manufacturer || null,
             model: device.model || null,
+            deviceName: device.deviceName || null,
             androidVersion: device.androidVersion || null,
             sdk: device.sdk || null,
             hardwareSerial: device.hardwareSerial || serial,
@@ -740,4 +773,6 @@ module.exports = {
   parseSettingBoolean,
   validateEndpoint,
   validateSerial,
+  normalizeDeviceName,
+  selectDeviceName,
 };

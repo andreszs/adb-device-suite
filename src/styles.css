@@ -55,7 +55,7 @@
   --serial: #7a879b;
   --device-id: #929dad;
   --device-detail-text: #44536b;
-  --alias-action: #526fdf;
+  --action-link: #526fdf;
   --empty-bg: rgba(255, 255, 255, 0.52);
   --connection-bg: rgba(255, 255, 255, 0.78);
   --troubleshoot-bg: rgba(255, 255, 255, 0.58);
@@ -122,7 +122,7 @@
   --serial: #687a98;
   --device-id: #71809a;
   --device-detail-text: #b8c4d8;
-  --alias-action: #86a0ff;
+  --action-link: #86a0ff;
   --empty-bg: rgba(14, 21, 35, 0.45);
   --connection-bg: rgba(16, 23, 39, 0.72);
   --troubleshoot-bg: rgba(13, 20, 34, 0.48);
@@ -211,13 +211,22 @@ h1, h2, h3, p { margin-top: 0; }
 .device-list { display: grid; gap: 6px; }
 .device-card { min-height: 72px; padding: 8px 14px; position: relative; isolation: isolate; overflow: hidden; display: grid; grid-template-columns: 48px 1fr auto; align-items: center; gap: 13px; border: 1px solid var(--line); border-radius: 11px; background: linear-gradient(120deg, var(--card-a), var(--card-b)); transition: border-color .15s ease, background-color .15s ease; }
 .device-card > * { position: relative; z-index: 1; }
-.device-card.has-battery::before { position: absolute; inset: 0 auto 0 0; width: var(--battery-level, 0%); pointer-events: none; content: ""; }
-.device-card.has-battery::before { z-index: -2; background: var(--battery-fill); }
-.device-card.is-low-battery::before { background: var(--battery-low-fill); }
-.device-card.is-charging::before { background: var(--charge-fill); }
-.device-card > .charging-effects { position: absolute; inset: 0 auto 0 0; z-index: 0; width: var(--battery-level, 0%); overflow: hidden; pointer-events: none; }
+.device-card > .battery-track {
+  position: absolute;
+  inset: 2px;
+  z-index: 0;
+  overflow: hidden;
+  border-radius: 8px;
+  pointer-events: none;
+}
+.battery-level-fill { position: absolute; inset: 0 auto 0 0; width: var(--battery-level, 0%); background: var(--battery-fill); }
+.device-card.is-low-battery .battery-level-fill { background: var(--battery-low-fill); }
+.device-card.is-charging .battery-level-fill { background: var(--charge-fill); }
+.battery-track > .charging-effects { position: absolute; inset: 0 auto 0 0; z-index: 1; width: var(--battery-level, 0%); overflow: hidden; pointer-events: none; }
 .charging-effects i { position: absolute; display: block; pointer-events: none; }
-.charge-sheen { top: -30%; bottom: -30%; left: -60px; width: 38px; opacity: 0; background: linear-gradient(90deg, transparent, var(--charge-effect-highlight), transparent); transform: skewX(-16deg); animation: charge-sheen 3.2s linear infinite; }
+.charge-sheen { top: -30%; bottom: -30%; left: -180px; width: 150px; opacity: 0; background: linear-gradient(90deg, transparent, var(--charge-effect-highlight), transparent); transform: skewX(-12deg); animation: charge-sheen 9s linear infinite; }
+.charge-sheen:nth-child(2) { animation-delay: -3s; }
+.charge-sheen:nth-child(3) { animation-delay: -6s; }
 .device-card:hover { border-color: var(--card-hover); }
 .device-icon { width: 44px; height: 44px; position: relative; display: grid; place-items: center; border-radius: 11px; color: var(--device-icon); background: linear-gradient(145deg, var(--device-icon-a), var(--device-icon-b)), var(--surface); border: 1px solid var(--device-icon-border); }
 .device-icon .phone-glyph { width: 23px; height: 23px; flex-basis: 23px; }
@@ -231,19 +240,12 @@ h1, h2, h3, p { margin-top: 0; }
 .device-main { min-width: 0; }
 .device-title-row { min-width: 0; min-height: 20px; gap: 7px; margin-bottom: 3px; }
 .device-title-row h3 { min-width: 0; margin: 0; display: flex; align-items: baseline; gap: 5px; overflow: hidden; font: 600 13.5px/1.25 "Segoe UI", Inter, system-ui, sans-serif; letter-spacing: -.1px; white-space: nowrap; }
-.device-alias, .device-model { overflow: hidden; text-overflow: ellipsis; }
-.device-alias { max-width: 240px; flex: 0 1 auto; }
+.device-name, .device-model { overflow: hidden; text-overflow: ellipsis; }
+.device-name { max-width: 240px; flex: 0 1 auto; }
 .device-model { flex: 0 1 auto; }
-.device-model.secondary, .title-separator { color: var(--muted); }
+.device-model.secondary { color: var(--device-detail-text); }
+.title-separator { color: var(--muted); }
 .title-separator { flex: 0 0 auto; }
-.alias-action { flex: 0 0 auto; margin: 0; padding: 0; border: 0; background: transparent; color: var(--alias-action); cursor: pointer; font-size: 12px; line-height: 1.25; text-decoration: none; }
-.alias-action:hover:not(:disabled), .alias-action:focus-visible { text-decoration: underline; text-underline-offset: 2px; }
-.alias-action:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
-.alias-action:disabled { cursor: not-allowed; opacity: .48; }
-.alias-action.muted { color: var(--muted); }
-.alias-editor { min-width: 0; display: flex; align-items: center; gap: 8px; }
-.alias-editor input { width: 220px; height: 24px; padding: 2px 7px; border: 1px solid var(--line-strong); border-radius: 5px; outline: 0; background: var(--input-bg); color: var(--text); font: 13px/1.25 "Segoe UI", Inter, system-ui, sans-serif; }
-.alias-editor input:focus { border-color: var(--accent); }
 .status-pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 5px; border: 0; border-radius: 5px; font-size: 10.5px; font-weight: 700; line-height: 1; letter-spacing: .3px; text-transform: uppercase; }
 .status-pill.online { color: var(--online-text); background: var(--online-bg); }
 .status-pill.online .status-dot { background: var(--online-dot); }
@@ -310,7 +312,7 @@ footer { width: 100%; min-height: 32px; flex: 0 0 32px; margin: 0; padding: 0; d
 .status-message.error .ui-icon { color: var(--danger); }
 .status-message.update .ui-icon { color: var(--accent); }
 .status-ready-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--success); }
-.status-action { flex: 0 0 auto; margin: 0 0 0 3px; padding: 0; border: 0; background: transparent; color: var(--alias-action); cursor: pointer; font: inherit; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+.status-action { flex: 0 0 auto; margin: 0 0 0 3px; padding: 0; border: 0; background: transparent; color: var(--action-link); cursor: pointer; font: inherit; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
 .app-version { min-width: 62px; padding: 0 12px; justify-content: center; border: 0; border-left: 1px solid var(--statusbar-border); color: var(--muted); background: transparent; cursor: pointer; font: inherit; font-variant-numeric: tabular-nums; transition: color .15s ease, background-color .15s ease; }
 .app-version:hover:not(:disabled) { color: var(--text); background: var(--text-button-hover-bg); }
 .app-version:disabled { opacity: .55; }
@@ -324,7 +326,7 @@ footer { width: 100%; min-height: 32px; flex: 0 0 32px; margin: 0; padding: 0; d
 
 @keyframes busy-line { 0% { transform: scaleX(.08); opacity: .55; } 50% { transform: scaleX(.72); opacity: 1; } 100% { transform: scaleX(1); opacity: .25; } }
 @keyframes hourglass-turn { 0%, 42% { transform: rotate(0deg); } 58%, 100% { transform: rotate(180deg); } }
-@keyframes charge-sheen { 0% { left: -60px; opacity: 0; } 10% { opacity: .38; } 72% { left: calc(100% + 60px); opacity: .38; } 82%, 100% { left: calc(100% + 60px); opacity: 0; } }
+@keyframes charge-sheen { 0% { left: -180px; opacity: 0; } 8% { opacity: .24; } 92% { left: calc(100% + 180px); opacity: .24; } 100% { left: calc(100% + 180px); opacity: 0; } }
 
 @media (prefers-reduced-motion: reduce) {
   .reconnect-button.working::after, .status-message.busy .ui-icon { animation: none; }

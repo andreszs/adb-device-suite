@@ -5,29 +5,15 @@ const path = require("node:path");
 const test = require("node:test");
 const Store = require("../electron/store.cjs");
 
-test("device aliases persist by stable identifier and can be removed", () => {
+test("obsolete device aliases are ignored when older settings are loaded", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "adb-device-suite-store-"));
   try {
-    const store = new Store(directory);
-    store.setDeviceAlias("R9MNA00VMTJ", "Daily test phone");
-
-    assert.equal(store.get().deviceAliases.R9MNA00VMTJ, "Daily test phone");
-    assert.equal(new Store(directory).get().deviceAliases.R9MNA00VMTJ, "Daily test phone");
-
-    store.setDeviceAlias("R9MNA00VMTJ", "   ");
-    assert.equal(store.get().deviceAliases.R9MNA00VMTJ, undefined);
-  } finally {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-test("device aliases are trimmed and constrained to 32 characters", () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "adb-device-suite-store-"));
-  try {
-    const store = new Store(directory);
-    store.setDeviceAlias("serial", "  Lab phone  ");
-    assert.equal(store.get().deviceAliases.serial, "Lab phone");
-    assert.throws(() => store.setDeviceAlias("serial", "x".repeat(33)), /up to 32 characters/);
+    fs.writeFileSync(path.join(directory, "settings.json"), JSON.stringify({
+      deviceAliases: { serial: "Old alias" },
+      savedConnections: [],
+    }));
+    assert.equal("deviceAliases" in new Store(directory).get(), false);
+    assert.equal("deviceAliases" in JSON.parse(fs.readFileSync(path.join(directory, "settings.json"), "utf8")), false);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

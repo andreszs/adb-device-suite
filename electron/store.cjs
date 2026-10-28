@@ -6,7 +6,6 @@ const DEFAULT_DATA = Object.freeze({
   adbPath: null,
   autoReconnect: true,
   chargingAnimation: true,
-  deviceAliases: {},
   savedConnections: [],
   themePreference: "light",
   languagePreference: "system",
@@ -14,15 +13,6 @@ const DEFAULT_DATA = Object.freeze({
 
 function normalizeThemePreference(value) {
   return value === "dark" || value === "auto" ? value : "light";
-}
-
-function normalizeAliases(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  return Object.fromEntries(Object.entries(value).flatMap(([identifier, alias]) => {
-    if (typeof alias !== "string") return [];
-    const normalized = alias.trim();
-    return identifier && normalized ? [[identifier, normalized.slice(0, 32)]] : [];
-  }));
 }
 
 function connectionId(endpoint, metadata = {}) {
@@ -56,20 +46,25 @@ class Store {
   #read() {
     try {
       const parsed = JSON.parse(fs.readFileSync(this.filePath, "utf8"));
-      return {
+      const current = { ...parsed };
+      delete current.deviceAliases;
+      const data = {
         ...DEFAULT_DATA,
-        ...parsed,
+        ...current,
         autoReconnect: parsed.autoReconnect !== false,
         chargingAnimation: parsed.chargingAnimation !== false,
-        deviceAliases: normalizeAliases(parsed.deviceAliases),
         savedConnections: Array.isArray(parsed.savedConnections)
           ? parsed.savedConnections.map(normalizeConnection).filter(Boolean)
           : [],
         themePreference: normalizeThemePreference(parsed.themePreference),
         languagePreference: normalizeLanguagePreference(parsed.languagePreference),
       };
+      if (Object.hasOwn(parsed, "deviceAliases")) {
+        fs.writeFileSync(this.filePath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+      }
+      return data;
     } catch {
-      return { ...DEFAULT_DATA, deviceAliases: {}, savedConnections: [] };
+      return { ...DEFAULT_DATA, savedConnections: [] };
     }
   }
 
@@ -123,19 +118,6 @@ class Store {
     if (!connection) return this.get();
     connection.autoReconnect = Boolean(enabled);
     if (enabled) connection.manuallyDisconnected = false;
-    this.#write();
-    return this.get();
-  }
-
-  setDeviceAlias(identifier, alias) {
-    if (typeof identifier !== "string" || !identifier.trim() || identifier.length > 256) {
-      throw new Error("A valid device identifier is required.");
-    }
-    if (typeof alias !== "string") throw new Error("The alias must be text.");
-    const normalized = alias.trim();
-    if (normalized.length > 32) throw new Error("Aliases can contain up to 32 characters.");
-    if (normalized) this.data.deviceAliases[identifier] = normalized;
-    else delete this.data.deviceAliases[identifier];
     this.#write();
     return this.get();
   }
@@ -222,6 +204,5 @@ class Store {
 module.exports = Store;
 module.exports.connectionId = connectionId;
 module.exports.normalizeConnection = normalizeConnection;
-module.exports.normalizeAliases = normalizeAliases;
 module.exports.normalizeThemePreference = normalizeThemePreference;
 module.exports.normalizeLanguagePreference = normalizeLanguagePreference;

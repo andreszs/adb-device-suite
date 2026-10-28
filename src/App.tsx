@@ -48,7 +48,7 @@ const EMPTY_SNAPSHOT: AdbSnapshot = {
   refreshedAt: new Date(0).toISOString(),
 };
 
-const EMPTY_SETTINGS: AppSettings = { adbPath: null, autoReconnect: true, chargingAnimation: true, deviceAliases: {}, savedConnections: [], themePreference: "light", languagePreference: "system" };
+const EMPTY_SETTINGS: AppSettings = { adbPath: null, autoReconnect: true, chargingAnimation: true, savedConnections: [], themePreference: "light", languagePreference: "system" };
 
 type ModalMode = "connect" | "pair" | null;
 type PairMethod = "code" | "qr";
@@ -114,7 +114,6 @@ function busyMessage(busy: string, t: TFunction) {
   if (busy.startsWith("connect:")) return t("busy.connect", { endpoint: busy.slice("connect:".length) });
   if (busy.startsWith("disconnect:")) return t("busy.disconnect");
   if (busy.startsWith("wifi:")) return t("busy.wifi");
-  if (busy.startsWith("alias:")) return t("busy.alias");
   if (busy.startsWith("settings:")) return t("busy.settings");
   if (busy === "restart") return t("busy.restart");
   if (busy === "choose-adb") return t("busy.chooseAdb");
@@ -139,9 +138,6 @@ function friendlyError(error: unknown, t: TFunction) {
     "Invalid QR pairing credentials.": "errors.invalidQr",
     "No Android device responded to the QR code before it expired.": "errors.qrTimeout",
     "Pairing succeeded, but ADB could not connect to the wireless debugging port within 20 seconds.": "errors.qrConnectTimeout",
-    "A valid device identifier is required.": "errors.invalidAlias",
-    "The alias must be text.": "errors.aliasText",
-    "Aliases can contain up to 32 characters.": "errors.aliasLong",
   };
   return known[clean] ? t(known[clean]) : clean || t("errors.unknown");
 }
@@ -249,7 +245,6 @@ function BatteryIndicator({ battery }: { battery: NonNullable<AdbDevice["battery
 }
 
 function DeviceCard({
-  alias,
   busy,
   chargingAnimation,
   group,
@@ -257,9 +252,7 @@ function DeviceCard({
   onEnableWireless,
   onDisconnect,
   onInfo,
-  onSetAlias,
 }: {
-  alias: string | null;
   busy: string | null;
   chargingAnimation: boolean;
   group: DeviceGroup;
@@ -267,7 +260,6 @@ function DeviceCard({
   onEnableWireless: (serial: string) => void;
   onDisconnect: (device: AdbDevice) => void;
   onInfo: (device: AdbDevice, name: string) => void;
-  onSetAlias: (identifier: string, alias: string) => Promise<boolean>;
 }) {
   const { t } = useTranslation();
   const { devices, identifier, primary, usb, wifi } = group;
@@ -277,6 +269,12 @@ function DeviceCard({
     || devices.find((device) => device.state === "unauthorized")
     || devices[0];
   const modelName = formatDeviceName(primary, t);
+  const deviceName = devices
+    .map((device) => device.deviceName?.trim())
+    .find((name) => name && ![modelName, primary.model, primary.device]
+      .filter(Boolean)
+      .some((candidate) => candidate!.toLowerCase() === name.toLowerCase())) || null;
+  const displayName = deviceName || modelName;
   const androidVersion = devices.find((device) => device.androidVersion)?.androidVersion;
   const ipAddress = wifi?.ipAddress || devices.find((device) => device.ipAddress)?.ipAddress;
   const ipAddresses = [...new Set(devices.flatMap((device) => device.ipAddresses || (device.ipAddress ? [device.ipAddress] : [])))];
@@ -294,28 +292,16 @@ function DeviceCard({
     ? ({ "--battery-level": `${batteryLevel}%` } as CSSProperties)
     : undefined;
   const lowBattery = hasBattery && batteryLevel <= 15 && !charging;
-  const [editingAlias, setEditingAlias] = useState(false);
-  const [aliasDraft, setAliasDraft] = useState(alias || "");
-
-  useEffect(() => {
-    if (!editingAlias) setAliasDraft(alias || "");
-  }, [alias, editingAlias]);
-
-  async function submitAlias(event: FormEvent) {
-    event.preventDefault();
-    if (await onSetAlias(identifier, aliasDraft)) setEditingAlias(false);
-  }
-
-  function cancelAlias() {
-    setAliasDraft(alias || "");
-    setEditingAlias(false);
-  }
-
   return (
     <article className={`device-card${hasBattery ? " has-battery" : ""}${lowBattery ? " is-low-battery" : ""}${charging ? " is-charging" : ""}${charging && chargingAnimation ? " animate-charging" : ""}`} style={batteryStyle}>
-      {charging && chargingAnimation && (
-        <span aria-hidden="true" className="charging-effects">
-          <i className="charge-sheen" />
+      {hasBattery && (
+        <span aria-hidden="true" className="battery-track">
+          <i className="battery-level-fill" />
+          {charging && chargingAnimation && <span className="charging-effects">
+            <i className="charge-sheen" />
+            <i className="charge-sheen" />
+            <i className="charge-sheen" />
+          </span>}
         </span>
       )}
       <div className={`device-icon ${wifi ? "wifi" : "usb"}`}>
@@ -327,36 +313,10 @@ function DeviceCard({
       </div>
       <div className="device-main">
         <div className="device-title-row">
-          {editingAlias ? (
-            <form className="alias-editor" onSubmit={submitAlias}>
-              <input
-                aria-label={t("device.aliasFor", { name: modelName })}
-                autoFocus
-                maxLength={32}
-                placeholder={t("device.aliasPlaceholder")}
-                value={aliasDraft}
-                onChange={(event) => setAliasDraft(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Escape") cancelAlias();
-                }}
-              />
-              <button className="alias-action" disabled={busy !== null} title={t("device.saveAlias", { name: modelName })} type="submit">{t("common.save")}</button>
-              <button className="alias-action muted" disabled={busy !== null} onClick={cancelAlias} title={t("device.cancelAlias")} type="button">{t("common.cancel")}</button>
-            </form>
-          ) : (
-            <>
-              <h3 title={alias ? `${alias} · ${modelName}` : modelName}>
-                {alias && <><span className="device-alias">{alias}</span><span className="title-separator">·</span></>}
-                <span className={alias ? "device-model secondary" : "device-model"}>{modelName}</span>
-              </h3>
-              <button
-                className="alias-action"
-                onClick={() => setEditingAlias(true)}
-                title={alias ? t("device.editAlias", { name: modelName }) : t("device.setAlias", { name: modelName })}
-                type="button"
-              >{alias ? t("device.editAliasText") : t("device.setAliasText")}</button>
-            </>
-          )}
+          <h3 title={deviceName ? `${deviceName} · ${modelName}` : modelName}>
+            {deviceName && <><span className="device-name">{deviceName}</span><span className="title-separator">·</span></>}
+            <span className={deviceName ? "device-model secondary" : "device-model"}>{modelName}</span>
+          </h3>
           <span className={`status-pill ${ready ? "online" : "warning"}`}>
             <span className="status-dot" />{stateLabel(ready ? "device" : statusDevice.state, t)}
           </span>
@@ -371,22 +331,22 @@ function DeviceCard({
       <div className="device-actions">
         {infoDevice?.battery?.level !== null && infoDevice?.battery && <BatteryIndicator battery={infoDevice.battery} />}
         <button
-          aria-label={t("deviceInfo.buttonTooltip", { name: alias || modelName })}
+          aria-label={t("deviceInfo.buttonTooltip", { name: displayName })}
           className="icon-button device-action-icon"
           disabled={!infoDevice || busy !== null}
-          onClick={() => infoDevice && onInfo(infoDevice, alias || modelName)}
-          title={t("deviceInfo.buttonTooltip", { name: alias || modelName })}
+          onClick={() => infoDevice && onInfo(infoDevice, displayName)}
+          title={t("deviceInfo.buttonTooltip", { name: displayName })}
           type="button"
         >
           <Icons.Info />
         </button>
         {wifiConnected && wifi ? (
           <button
-            aria-label={t("device.disconnectTooltip", { name: alias || modelName })}
+            aria-label={t("device.disconnectTooltip", { name: displayName })}
             className="icon-button device-action-icon danger"
             disabled={busy !== null}
             onClick={() => onDisconnect(wifi)}
-            title={t("device.disconnectTooltip", { name: alias || modelName })}
+            title={t("device.disconnectTooltip", { name: displayName })}
             type="button"
           >
             <Icons.WifiOff />
@@ -397,7 +357,7 @@ function DeviceCard({
               className="button secondary"
               disabled={busy !== null}
               onClick={() => onConnect(wifi)}
-              title={t("device.reconnectOfflineTooltip", { name: alias || modelName })}
+              title={t("device.reconnectOfflineTooltip", { name: displayName })}
             >
               {busy === `connect:${wifi.serial}` ? t("device.connecting") : t("device.reconnectOffline")}
             </button>
@@ -405,7 +365,7 @@ function DeviceCard({
               className="button ghost-danger"
               disabled={busy !== null}
               onClick={() => onDisconnect(wifi)}
-              title={t("device.removeOfflineTooltip", { name: alias || modelName })}
+              title={t("device.removeOfflineTooltip", { name: displayName })}
             >
               {t("device.removeOffline")}
             </button>
@@ -415,7 +375,7 @@ function DeviceCard({
             className="button secondary has-icon"
             disabled={!ready || busy !== null}
             onClick={() => onEnableWireless(usb.serial)}
-            title={t("device.enableTooltip", { name: alias || modelName })}
+            title={t("device.enableTooltip", { name: displayName })}
           >
             <Icons.Wifi /> {busy === `wifi:${usb.serial}` ? t("device.connecting") : t("device.useWifi")}
           </button>
@@ -1172,7 +1132,7 @@ export default function App() {
   }, [i18n.resolvedLanguage]);
 
   useEffect(() => {
-    if (!toast) return;
+    if (!toast || toast.type === "error") return;
     const timer = window.setTimeout(() => setToast(null), 5_000);
     return () => window.clearTimeout(timer);
   }, [toast]);
@@ -1332,21 +1292,6 @@ export default function App() {
     }
   }
 
-  async function setDeviceAlias(identifier: string, alias: string) {
-    setBusy(`alias:${identifier}`);
-    try {
-      const normalized = alias.trim();
-      setSettings(await window.adbSuite.setDeviceAlias(identifier, normalized));
-      setToast({ type: "success", message: normalized ? t("status.aliasSaved") : t("status.aliasRemoved") });
-      return true;
-    } catch (error) {
-      setToast({ type: "error", message: friendlyError(error, t) });
-      return false;
-    } finally {
-      setBusy(null);
-    }
-  }
-
   const isEmpty = deviceGroups.length === 0;
   const statusKind = busy ? "busy" : toast?.type || (availableUpdate ? "update" : "idle");
   const statusMessage = busy
@@ -1431,7 +1376,6 @@ export default function App() {
                 <div className="device-list">
                   {deviceGroups.map((group) => (
                     <DeviceCard
-                      alias={settings.deviceAliases[group.identifier] || null}
                       busy={busy}
                       chargingAnimation={settings.chargingAnimation}
                       group={group}
@@ -1447,7 +1391,6 @@ export default function App() {
                       }}
                       onEnableWireless={(serial) => action(`wifi:${serial}`, () => window.adbSuite.enableWireless(serial))}
                       onInfo={(target, name) => setInfoTarget({ serial: target.serial, name })}
-                      onSetAlias={setDeviceAlias}
                     />
                   ))}
                 </div>
@@ -1487,8 +1430,6 @@ export default function App() {
                 </div>
                 <div className="connection-grid">
                   {disconnectedSavedConnections.map((saved) => {
-                    const savedIdentifier = saved.hardwareSerial || saved.endpoint;
-                    const savedAlias = settings.deviceAliases[savedIdentifier] || null;
                     const reconnecting = busy === `connect:${saved.endpoint}`;
                     const connected = snapshot.devices.some((device) => (
                       device.connection === "wifi"
@@ -1499,12 +1440,12 @@ export default function App() {
                     return (
                       <article className="connection-card" key={saved.endpoint}>
                         <div className="small-icon"><Icons.Link /></div>
-                        <div><strong>{savedAlias ? `${savedAlias} · ${saved.label || t("common.androidDevice")}` : saved.label || t("common.androidDevice")}</strong><code>{saved.endpoint}</code></div>
+                        <div><strong>{saved.label || t("common.androidDevice")}</strong><code>{saved.endpoint}</code></div>
                         <button
                           className={`button small secondary reconnect-button${reconnecting ? " working" : ""}`}
                           disabled={connected || busy !== null}
-                          onClick={() => action(`connect:${saved.endpoint}`, () => window.adbSuite.connect(saved.endpoint))}
-                          title={t("reconnect.tooltip", { name: savedAlias || saved.label || saved.endpoint })}
+                          onClick={() => action(`connect:${saved.endpoint}`, () => window.adbSuite.reconnect(saved.id))}
+                          title={t("reconnect.tooltip", { name: saved.label || saved.endpoint })}
                         >{connected ? t("common.connected") : reconnecting ? t("reconnect.working") : t("reconnect.button")}</button>
                         <button aria-label={t("reconnect.forget", { endpoint: saved.endpoint })} className="icon-button subtle" onClick={() => forgetConnection(saved.id)} title={t("reconnect.forgetTooltip", { endpoint: saved.endpoint })}><Icons.Trash /></button>
                       </article>

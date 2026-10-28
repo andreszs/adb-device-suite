@@ -14,6 +14,7 @@ const {
   parseScreenInfo,
   parseStorageInfo,
   parseSettingBoolean,
+  selectDeviceName,
   validateEndpoint,
   validateSerial,
 } = require("../electron/adb-service.cjs");
@@ -165,6 +166,13 @@ test("validateSerial rejects whitespace and control characters", () => {
   assert.equal(validateSerial(" 192.168.1.2:5555 "), "192.168.1.2:5555");
   assert.throws(() => validateSerial("device name"), /Invalid device/);
   assert.throws(() => validateSerial("device\nname"), /Invalid device/);
+});
+
+test("device names prefer a configured name and use Bluetooth when Android only returns the model", () => {
+  assert.equal(selectDeviceName("SM-G973F", "Andres's S10", "Andres's S10"), "Andres's S10");
+  assert.equal(selectDeviceName("M2004J19C", "M2004J19C", "Redmi 9"), "Redmi 9");
+  assert.equal(selectDeviceName("SM-G930F", "null", "Galaxy S7"), "Galaxy S7");
+  assert.equal(selectDeviceName("Pixel 8", "null", "undefined"), null);
 });
 
 test("connect only succeeds after ADB verifies the endpoint is a device", async () => {

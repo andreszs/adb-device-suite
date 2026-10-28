@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld("adbSuite", {
   getDeviceInfo: (serial) => ipcRenderer.invoke("devices:info", serial),
   getSettings: () => ipcRenderer.invoke("settings:get"),
   connect: (endpoint) => ipcRenderer.invoke("adb:connect", endpoint),
+  reconnect: (id) => ipcRenderer.invoke("adb:reconnect", id),
   disconnect: (endpoint) => ipcRenderer.invoke("adb:disconnect", endpoint),
   pair: (endpoint, code) => ipcRenderer.invoke("adb:pair", { endpoint, code }),
   pairByQr: (serviceName, password) => ipcRenderer.invoke("adb:pair-qr", { serviceName, password }),
@@ -19,7 +20,6 @@ contextBridge.exposeInMainWorld("adbSuite", {
   setThemePreference: (themePreference) => ipcRenderer.invoke("settings:set-theme-preference", themePreference),
   setLanguagePreference: (languagePreference) => ipcRenderer.invoke("settings:set-language-preference", languagePreference),
   setConnectionAutoReconnect: (id, enabled) => ipcRenderer.invoke("settings:set-connection-auto-reconnect", { id, enabled }),
-  setDeviceAlias: (identifier, alias) => ipcRenderer.invoke("settings:set-device-alias", { identifier, alias }),
   forgetConnection: (identifier) => ipcRenderer.invoke("settings:forget-connection", identifier),
   openExternal: (url) => ipcRenderer.invoke("app:open-external", url),
   onSnapshot: (callback) => {

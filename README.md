@@ -98,7 +98,7 @@ The Store package uses the identity reserved for ADB Device Suite in Partner Cen
 
 ## Security
 
-ADB Device Suite invokes the local `adb` executable with structured argument arrays and never interpolates device values into a shell command. Android's existing ADB keys and authorization flow remain in control. Saved connection endpoints and optional device aliases are stored only in Electron's local application-data directory.
+ADB Device Suite invokes the local `adb` executable with structured argument arrays and never interpolates device values into a shell command. Android's existing ADB keys and authorization flow remain in control. Saved connection endpoints are stored only in Electron's local application-data directory.
 
 Only enable wireless debugging on networks you trust.
 

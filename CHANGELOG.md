@@ -4,6 +4,27 @@ All notable changes to ADB Device Suite will be documented in this file.
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-10-28
+
+### Fixed
+
+- Saved devices reconnect through their current mDNS endpoint first and fall back to the last valid IP address.
+- TLS service names are no longer treated as manual `IP:port` endpoints, and affected saved records migrate automatically after discovery.
+- The latest status-bar error remains visible instead of disappearing after five seconds.
+
+### Added
+
+- Device cards use Android's configured device name as their primary name, with Bluetooth name and model fallbacks.
+
+### Changed
+
+- The charging indicator now uses a continuous succession of longer, slower waves.
+- Battery-level fills are inset from device-card edges and model names use a darker, more legible tone.
+
+### Removed
+
+- Manual device aliases and their local persistence, now superseded by Android's dynamically reported device name.
+
 ## [0.1.4] - 2026-10-28
 
 ### Added

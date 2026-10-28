@@ -2,7 +2,13 @@ const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { app, BrowserWindow, dialog, ipcMain, nativeTheme, powerMonitor, shell } = require("electron");
 const { AdbService } = require("./adb-service.cjs");
-const { ReconnectManager, metadataFor } = require("./reconnect-manager.cjs");
+const {
+  ReconnectManager,
+  isNetworkEndpoint,
+  mdnsServiceNameFromSerial,
+  metadataFor,
+  serviceMatchesConnection,
+} = require("./reconnect-manager.cjs");
 const { checkForUpdates } = require("./update-service.cjs");
 const Store = require("./store.cjs");
 const { resolveLanguage } = require("./language.cjs");
@@ -140,23 +146,39 @@ async function pollBatteries() {
 
 function rememberFromSnapshot(endpoint, snapshot, fallback = {}) {
   const device = snapshot.devices.find((item) => item.connection === "wifi" && item.serial === endpoint);
-  const service = snapshot.services.find((item) => item.endpoint === endpoint);
+  const identity = {
+    endpoint,
+    hardwareSerial: device?.hardwareSerial || fallback.hardwareSerial || null,
+    mdnsServiceName: fallback.mdnsServiceName || mdnsServiceNameFromSerial(endpoint),
+    mode: fallback.mode || "legacy",
+  };
+  const service = snapshot.services.find((item) => item.endpoint === endpoint)
+    || snapshot.services.find((item) => serviceMatchesConnection(item, identity));
   const detected = device ? metadataFor(device, service, fallback.mode || "legacy") : null;
   const metadata = detected
     ? {
         ...detected,
         label: detected.label || fallback.label || null,
         hardwareSerial: detected.hardwareSerial || fallback.hardwareSerial || null,
-        mdnsServiceName: detected.mdnsServiceName || fallback.mdnsServiceName || null,
+        mdnsServiceName: detected.mdnsServiceName || identity.mdnsServiceName,
       }
     : {
         label: fallback.label || null,
         hardwareSerial: fallback.hardwareSerial || null,
-        mdnsServiceName: service?.serviceName || fallback.mdnsServiceName || null,
+        mdnsServiceName: service?.serviceName || identity.mdnsServiceName,
         mode: service?.type === "connect" ? "tls" : fallback.mode || "legacy",
       };
-  store.rememberConnection(endpoint, metadata);
-  const saved = store.get().savedConnections.find((item) => item.endpoint === endpoint);
+  const existing = store.get().savedConnections.find((item) => (
+    (metadata.hardwareSerial && item.hardwareSerial === metadata.hardwareSerial)
+    || (metadata.mdnsServiceName && item.mdnsServiceName === metadata.mdnsServiceName)
+  ));
+  const resolvedEndpoint = [service?.endpoint, endpoint, existing?.endpoint].find(isNetworkEndpoint);
+  if (!resolvedEndpoint) return;
+  store.rememberConnection(resolvedEndpoint, metadata);
+  const saved = store.get().savedConnections.find((item) => (
+    item.endpoint === resolvedEndpoint
+    || (metadata.hardwareSerial && item.hardwareSerial === metadata.hardwareSerial)
+  ));
   if (saved) reconnectManager.reset(saved.id);
   sendSettings();
 }
@@ -304,6 +326,15 @@ function registerIpc() {
     const snapshot = await adbService.snapshot();
     rememberFromSnapshot(result.endpoint, snapshot);
     sendSnapshot(snapshot);
+    return { ...result, settings: currentSettings() };
+  });
+
+  ipcMain.handle("adb:reconnect", async (_event, id) => {
+    const before = await adbService.snapshot();
+    const result = await reconnectManager.reconnect(id, before);
+    const snapshot = await adbService.snapshot();
+    sendSnapshot(snapshot);
+    sendSettings();
     return { ...result, settings: currentSettings() };
   });
 
@@ -461,12 +492,6 @@ function registerIpc() {
   ipcMain.handle("settings:set-connection-auto-reconnect", (_event, { id, enabled }) => {
     store.setConnectionAutoReconnect(id, enabled);
     reconnectManager.reset(id);
-    sendSettings();
-    return currentSettings();
-  });
-
-  ipcMain.handle("settings:set-device-alias", (_event, { identifier, alias }) => {
-    store.setDeviceAlias(identifier, alias);
     sendSettings();
     return currentSettings();
   });

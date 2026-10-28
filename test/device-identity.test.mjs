@@ -8,7 +8,7 @@ const saved = {
   hardwareSerial: "R9MNA00VMTJ",
 };
 
-test("a saved connection matches its physical USB device despite IP and alias changes", () => {
+test("a saved connection matches its physical USB device despite IP changes", () => {
   const usbDevice = {
     serial: "R9MNA00VMTJ",
     hardwareSerial: "r9mna00vmtj",

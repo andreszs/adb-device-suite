@@ -9,6 +9,7 @@ declare global {
       getDeviceInfo: (serial: string) => Promise<DeviceInfo>;
       getSettings: () => Promise<AppSettings>;
       connect: (endpoint: string) => Promise<ActionResult>;
+      reconnect: (id: string) => Promise<ActionResult>;
       disconnect: (endpoint: string) => Promise<ActionResult>;
       pair: (endpoint: string, code: string) => Promise<ActionResult>;
       pairByQr: (serviceName: string, password: string) => Promise<ActionResult>;
@@ -21,7 +22,6 @@ declare global {
       setThemePreference: (themePreference: "light" | "dark" | "auto") => Promise<AppSettings>;
       setLanguagePreference: (languagePreference: LanguagePreference) => Promise<{ settings: AppSettings; resolvedLanguage: AppLanguage }>;
       setConnectionAutoReconnect: (id: string, enabled: boolean) => Promise<AppSettings>;
-      setDeviceAlias: (identifier: string, alias: string) => Promise<AppSettings>;
       forgetConnection: (identifier: string) => Promise<AppSettings>;
       openExternal: (url: string) => Promise<void>;
       onSnapshot: (callback: (snapshot: AdbSnapshot) => void) => () => void;
@@ -46,6 +46,7 @@ declare global {
     device: string | null;
     transportId: string | null;
     manufacturer?: string | null;
+    deviceName?: string | null;
     androidVersion?: string | null;
     sdk?: string | null;
     hardwareSerial?: string | null;
@@ -171,7 +172,6 @@ declare global {
     adbPath: string | null;
     autoReconnect: boolean;
     chargingAnimation: boolean;
-    deviceAliases: Record<string, string>;
     savedConnections: SavedConnection[];
     themePreference: "light" | "dark" | "auto";
     languagePreference: LanguagePreference;
@@ -186,6 +186,7 @@ declare global {
     message: string;
     pendingConnection?: boolean;
     verified?: boolean;
+    connectionSource?: "mdns" | "saved";
     settings?: AppSettings;
   }
 }

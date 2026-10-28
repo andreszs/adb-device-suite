@@ -2,7 +2,7 @@ const BACKOFF_MS = [2_000, 5_000, 10_000, 20_000, 30_000, 60_000];
 const MISSING_GRACE_MS = 8_000;
 
 function deviceLabel(device) {
-  return [device.manufacturer, device.model || device.device]
+  return device.deviceName || [device.manufacturer, device.model || device.device]
     .filter(Boolean)
     .map((part) => String(part).trim())
     .filter((part, index, parts) => index === 0 || part.toLowerCase() !== parts[0]?.toLowerCase())
@@ -11,14 +11,12 @@ function deviceLabel(device) {
 
 function serviceMatchesConnection(service, connection) {
   if (!service || service.type === "pairing") return false;
-  if (connection.mode === "tls" && service.type !== "connect") return false;
-  if (connection.mode === "legacy" && service.type !== "legacy") return false;
   if (service.endpoint === connection.endpoint) return true;
   if (connection.mdnsServiceName && service.serviceName === connection.mdnsServiceName) return true;
   if (connection.hardwareSerial) {
     const prefix = `adb-${connection.hardwareSerial}`.toLowerCase();
-    return service.serviceName.toLowerCase() === prefix
-      || service.serviceName.toLowerCase().startsWith(`${prefix}-`);
+    if (service.serviceName.toLowerCase() === prefix
+      || service.serviceName.toLowerCase().startsWith(`${prefix}-`)) return true;
   }
   return false;
 }
@@ -42,6 +40,36 @@ function metadataFor(device, service = null, fallbackMode = "legacy") {
 function endpointHost(endpoint) {
   const match = String(endpoint).match(/^\[?([^\]]+?)]?:\d+$/);
   return match?.[1] || null;
+}
+
+function isNetworkEndpoint(endpoint) {
+  const match = String(endpoint || "").trim().match(/^(?:\[[0-9a-fA-F:]+]|[a-zA-Z0-9._-]+):(\d{1,5})$/);
+  if (!match) return false;
+  const port = Number(match[1]);
+  return port >= 1 && port <= 65535;
+}
+
+function mdnsServiceNameFromSerial(serial) {
+  return String(serial || "").match(/^(.+)\._adb(?:-tls-connect)?\._tcp\.?$/i)?.[1] || null;
+}
+
+function reconnectCandidates(connection, snapshot) {
+  const candidates = [];
+  const discovered = snapshot.services.find((service) => serviceMatchesConnection(service, connection));
+  if (discovered && isNetworkEndpoint(discovered.endpoint)) {
+    candidates.push({ endpoint: discovered.endpoint, service: discovered, source: "mdns" });
+  }
+  if (isNetworkEndpoint(connection.endpoint)
+    && !candidates.some((candidate) => candidate.endpoint === connection.endpoint)) {
+    candidates.push({ endpoint: connection.endpoint, service: null, source: "saved" });
+  }
+  return candidates;
+}
+
+function isTlsConnection(connection) {
+  return connection.mode === "tls"
+    || Boolean(connection.mdnsServiceName)
+    || /\._adb-tls-connect\._tcp\.?$/i.test(String(connection.endpoint || ""));
 }
 
 class ReconnectManager {
@@ -108,6 +136,59 @@ class ReconnectManager {
     };
   }
 
+  async #connectConnection(connection, snapshot) {
+    const candidates = reconnectCandidates(connection, snapshot);
+    if (!candidates.length) {
+      throw new Error("The device is not currently advertised through mDNS and has no valid saved IP address.");
+    }
+
+    const failures = [];
+    for (const candidate of candidates) {
+      try {
+        const result = await this.adbService.connect(candidate.endpoint);
+        this.store.rememberConnection(candidate.endpoint, {
+          label: connection.label,
+          hardwareSerial: connection.hardwareSerial,
+          mdnsServiceName: candidate.service?.serviceName || connection.mdnsServiceName,
+          mode: candidate.service?.type === "connect" ? "tls" : connection.mode,
+        });
+        return { ...result, connectionSource: candidate.source };
+      } catch (error) {
+        failures.push(`${candidate.source}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    throw new Error(`Could not reconnect to the device (${failures.join("; ")}).`);
+  }
+
+  async reconnect(id, snapshot) {
+    const connection = this.store.get().savedConnections.find((item) => item.id === id);
+    if (!connection) throw new Error("The saved connection no longer exists.");
+
+    const connectedDevice = snapshot.devices.find((device) => deviceMatchesConnection(device, connection));
+    if (connectedDevice) {
+      return { endpoint: connectedDevice.serial, verified: true, message: `Connected to ${connectedDevice.serial}` };
+    }
+
+    this.#update(connection.id, { status: "reconnecting", lastError: null });
+    try {
+      const result = await this.#connectConnection(connection, snapshot);
+      this.#update(connection.id, {
+        status: "connected",
+        attempts: 0,
+        missingSince: null,
+        nextAttemptAt: 0,
+        lastError: null,
+      });
+      return result;
+    } catch (error) {
+      this.#update(connection.id, {
+        status: "waiting",
+        lastError: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+
   async process(snapshot) {
     if (this.running || !snapshot.adb.available) return { reconnected: false, settingsChanged: false };
     const now = Date.now();
@@ -136,12 +217,17 @@ class ReconnectManager {
           device.hardwareSerial
           && item.serviceName.toLowerCase().startsWith(`adb-${device.hardwareSerial}`.toLowerCase())
         ));
-      const endpoint = service?.endpoint || device.serial;
-      const metadata = metadataFor(device, service, service?.type === "connect" ? "tls" : "legacy");
-      const known = this.store.get().savedConnections.some((connection) => (
-        connection.endpoint === endpoint
-        || (metadata.hardwareSerial && connection.hardwareSerial === metadata.hardwareSerial)
+      const existing = this.store.get().savedConnections.find((connection) => (
+        connection.endpoint === device.serial
+        || (device.hardwareSerial && connection.hardwareSerial === device.hardwareSerial)
       ));
+      const endpoint = [service?.endpoint, device.serial, existing?.endpoint].find(isNetworkEndpoint);
+      if (!endpoint) continue;
+      const metadata = {
+        ...metadataFor(device, service, service?.type === "connect" ? "tls" : "legacy"),
+        mdnsServiceName: service?.serviceName || mdnsServiceNameFromSerial(device.serial),
+      };
+      const known = Boolean(existing);
       if (known) {
         settingsChanged = this.store.observeConnection(endpoint, metadata) || settingsChanged;
       } else {
@@ -176,18 +262,10 @@ class ReconnectManager {
       }
       if (now - state.missingSince < MISSING_GRACE_MS || now < state.nextAttemptAt) continue;
 
-      const discovered = snapshot.services.find((service) => serviceMatchesConnection(service, connection));
-      const endpoint = discovered?.endpoint || connection.endpoint;
       this.running = true;
       this.#update(connection.id, { status: "reconnecting", lastError: null });
       try {
-        await this.adbService.connect(endpoint);
-        this.store.rememberConnection(endpoint, {
-          label: connection.label,
-          hardwareSerial: connection.hardwareSerial,
-          mdnsServiceName: discovered?.serviceName || connection.mdnsServiceName,
-          mode: discovered?.type === "connect" ? "tls" : connection.mode,
-        });
+        await this.#connectConnection(connection, snapshot);
         this.#update(connection.id, {
           status: "connected",
           attempts: 0,
@@ -199,7 +277,7 @@ class ReconnectManager {
       } catch (error) {
         const attempts = state.attempts + 1;
         this.#update(connection.id, {
-          status: connection.mode === "legacy" && attempts >= 5 ? "needs-usb" : "waiting",
+          status: !isTlsConnection(connection) && attempts >= 5 ? "needs-usb" : "waiting",
           attempts,
           nextAttemptAt: now + BACKOFF_MS[Math.min(attempts - 1, BACKOFF_MS.length - 1)],
           lastError: error instanceof Error ? error.message : String(error),
@@ -218,5 +296,9 @@ module.exports = {
   deviceMatchesConnection,
   metadataFor,
   endpointHost,
+  isNetworkEndpoint,
+  isTlsConnection,
+  mdnsServiceNameFromSerial,
+  reconnectCandidates,
   serviceMatchesConnection,
 };
