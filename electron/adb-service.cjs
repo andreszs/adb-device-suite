@@ -426,7 +426,9 @@ class AdbService {
       deviceName,
       androidVersion: properties["ro.build.version.release"] || null,
       sdk: properties["ro.build.version.sdk"] || null,
-      hardwareSerial: properties["ro.serialno"] || properties["ro.boot.serialno"] || null,
+      hardwareSerial: properties["ro.serialno"]
+        || properties["ro.boot.serialno"]
+        || (device.connection === "usb" ? device.serial : null),
       ipAddress,
       ipAddresses,
     };

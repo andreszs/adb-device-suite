@@ -39,7 +39,7 @@ import { FaGithub } from "react-icons/fa6";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { APP_LANGUAGES, systemLanguage } from "./i18n/languages";
-import { mdnsServiceMatchesDevice, savedConnectionMatchesDevice } from "./device-identity.mjs";
+import { mdnsServiceMatchesDevice, savedConnectionMatchesDevice, stableDeviceSerial } from "./device-identity.mjs";
 
 const EMPTY_SNAPSHOT: AdbSnapshot = {
   adb: { available: false, path: null, version: null, error: null },
@@ -149,6 +149,20 @@ function formatDeviceName(device: AdbDevice, t: TFunction) {
   return pieces.filter((part, index) => index === 0 || part.toLowerCase() !== pieces[0]?.toLowerCase()).join(" ") || t("common.androidDevice");
 }
 
+function deviceGroupDisplayName(group: DeviceGroup, t: TFunction) {
+  const modelName = formatDeviceName(group.primary, t);
+  const deviceName = group.devices
+    .map((device) => device.deviceName?.trim())
+    .find((name) => name && ![modelName, group.primary.model, group.primary.device]
+      .filter(Boolean)
+      .some((candidate) => candidate!.toLowerCase() === name.toLowerCase()));
+  return deviceName || modelName;
+}
+
+function compareDeviceNames(left: string, right: string) {
+  return left.localeCompare(right, undefined, { sensitivity: "base", numeric: true });
+}
+
 function stateLabel(state: string, t: TFunction) {
   if (state === "device") return t("common.connected");
   if (state === "unauthorized") return "unauthorized";
@@ -188,9 +202,9 @@ function createQrPairingCredentials() {
 function groupDevices(devices: AdbDevice[]): DeviceGroup[] {
   const grouped = new Map<string, AdbDevice[]>();
   for (const device of devices) {
-    const hardwareSerial = device.hardwareSerial?.trim();
+    const hardwareSerial = stableDeviceSerial(device);
     const key = hardwareSerial
-      ? `serial:${hardwareSerial}`
+      ? `serial:${hardwareSerial.toLowerCase()}`
       : `transport:${device.connection}:${device.serial}`;
     const existing = grouped.get(key);
     if (existing) existing.push(device);
@@ -269,12 +283,8 @@ function DeviceCard({
     || devices.find((device) => device.state === "unauthorized")
     || devices[0];
   const modelName = formatDeviceName(primary, t);
-  const deviceName = devices
-    .map((device) => device.deviceName?.trim())
-    .find((name) => name && ![modelName, primary.model, primary.device]
-      .filter(Boolean)
-      .some((candidate) => candidate!.toLowerCase() === name.toLowerCase())) || null;
-  const displayName = deviceName || modelName;
+  const displayName = deviceGroupDisplayName(group, t);
+  const deviceName = displayName !== modelName ? displayName : null;
   const androidVersion = devices.find((device) => device.androidVersion)?.androidVersion;
   const ipAddress = wifi?.ipAddress || devices.find((device) => device.ipAddress)?.ipAddress;
   const ipAddresses = [...new Set(devices.flatMap((device) => device.ipAddresses || (device.ipAddress ? [device.ipAddress] : [])))];
@@ -1151,12 +1161,24 @@ export default function App() {
     return [...unique.values()];
   }, [snapshot.devices, snapshot.services]);
 
-  const deviceGroups = useMemo(() => groupDevices(snapshot.devices), [snapshot.devices]);
+  const deviceGroups = useMemo(
+    () => groupDevices(snapshot.devices)
+      .sort((left, right) => compareDeviceNames(
+        deviceGroupDisplayName(left, t),
+        deviceGroupDisplayName(right, t),
+      )),
+    [snapshot.devices, t],
+  );
 
   const disconnectedSavedConnections = useMemo(
-    () => settings.savedConnections.filter((saved) => (
-      !snapshot.devices.some((device) => savedConnectionMatchesDevice(saved, device))
-    )),
+    () => settings.savedConnections
+      .filter((saved) => (
+        !snapshot.devices.some((device) => savedConnectionMatchesDevice(saved, device))
+      ))
+      .sort((left, right) => compareDeviceNames(
+        left.label || left.endpoint,
+        right.label || right.endpoint,
+      )),
     [settings.savedConnections, snapshot.devices],
   );
 

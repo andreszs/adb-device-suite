@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mdnsServiceMatchesDevice, savedConnectionMatchesDevice } from "../src/device-identity.mjs";
+import { mdnsServiceMatchesDevice, savedConnectionMatchesDevice, stableDeviceSerial } from "../src/device-identity.mjs";
 
 const saved = {
   id: "serial:R9MNA00VMTJ",
@@ -15,6 +15,21 @@ test("a saved connection matches its physical USB device despite IP changes", ()
     connection: "usb",
   };
   assert.equal(savedConnectionMatchesDevice(saved, usbDevice), true);
+});
+
+test("a USB transport falls back to its ADB serial when metadata is unavailable", () => {
+  const usbDevice = {
+    serial: "ZE222TKQ8S",
+    hardwareSerial: null,
+    connection: "usb",
+  };
+
+  assert.equal(stableDeviceSerial(usbDevice), "ZE222TKQ8S");
+  assert.equal(savedConnectionMatchesDevice({
+    id: "serial:ZE222TKQ8S",
+    endpoint: "192.168.0.16:5555",
+    hardwareSerial: "ZE222TKQ8S",
+  }, usbDevice), true);
 });
 
 test("devices with the same model are not merged without a matching serial", () => {

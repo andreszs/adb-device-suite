@@ -4,6 +4,14 @@ All notable changes to ADB Device Suite will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Connected devices and saved connections are sorted naturally by device name, case-insensitively.
+
+### Fixed
+
+- USB and Wi-Fi transports remain grouped when USB metadata is temporarily unavailable but its ADB serial matches the device hardware serial.
+
 ## [0.1.5] - 2026-10-28
 
 ### Fixed

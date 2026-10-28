@@ -2,10 +2,17 @@ function normalized(value) {
   return value?.trim().toLowerCase() || null;
 }
 
+export function stableDeviceSerial(device) {
+  const hardwareSerial = device.hardwareSerial?.trim();
+  if (hardwareSerial) return hardwareSerial;
+  if (device.connection === "usb") return device.serial?.trim() || null;
+  return null;
+}
+
 export function savedConnectionMatchesDevice(saved, device) {
   const savedHardwareSerial = normalized(saved.hardwareSerial)
     || (saved.id.startsWith("serial:") ? normalized(saved.id.slice("serial:".length)) : null);
-  const deviceHardwareSerial = normalized(device.hardwareSerial);
+  const deviceHardwareSerial = normalized(stableDeviceSerial(device));
 
   if (savedHardwareSerial && deviceHardwareSerial) {
     return savedHardwareSerial === deviceHardwareSerial;

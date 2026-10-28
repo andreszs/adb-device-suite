@@ -26,9 +26,19 @@ ADB Device Suite is a local-first desktop application for discovering, pairing, 
 
 ## Screenshots
 
+### Device overview
+
 ![ADB Device Suite main window showing connected Android devices](docs/screenshots/main-window.png)
 
+### Settings
+
 ![ADB Device Suite settings dialog](docs/screenshots/settings-dialog.png)
+
+### Wireless pairing
+
+| Pairing code | QR code |
+| --- | --- |
+| ![Pair an Android device using its six-digit wireless debugging code](docs/screenshots/pairing-code-dialog.png) | ![Pair an Android device by scanning a wireless debugging QR code](docs/screenshots/qr-pairing-dialog.png) |
 
 ## Features
 
