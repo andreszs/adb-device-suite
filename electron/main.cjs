@@ -13,6 +13,7 @@ if (process.platform === "win32") {
 
 const FALLBACK_POLL_INTERVAL_MS = 15_000;
 const DEVICE_PROBE_INTERVAL_MS = 1_000;
+const BATTERY_POLL_INTERVAL_MS = 5_000;
 
 let mainWindow;
 let adbService;
@@ -29,7 +30,10 @@ let deviceTrackerRestartTimer = null;
 let deviceTrackerRefreshTimer = null;
 let deviceProbeTimer = null;
 let deviceProbeRunning = false;
+let batteryPollTimer = null;
+let batteryPollRunning = false;
 let lastDeviceTransportList = null;
+let latestSnapshot = null;
 let shuttingDown = false;
 
 function createWindow() {
@@ -75,6 +79,7 @@ function createWindow() {
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
+  mainWindow.on("focus", () => void pollBatteries());
 }
 
 function currentSettings() {
@@ -88,16 +93,62 @@ function sendSettings() {
 }
 
 function sendSnapshot(snapshot) {
+  latestSnapshot = snapshot;
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send("devices:changed", snapshot);
+  }
+}
+
+function sameBattery(left, right) {
+  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+}
+
+async function pollBatteries() {
+  if (batteryPollRunning || shuttingDown || !latestSnapshot?.adb.available) return;
+  if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible() || mainWindow.isMinimized()) return;
+  const serials = [...new Set(latestSnapshot.devices
+    .filter((device) => device.state === "device")
+    .map((device) => device.serial))];
+  if (!serials.length) return;
+
+  batteryPollRunning = true;
+  try {
+    const results = await Promise.all(serials.map(async (serial) => {
+      try {
+        return [serial, await adbService.battery(serial)];
+      } catch {
+        return [serial, null];
+      }
+    }));
+    const readings = new Map(results.filter(([, battery]) => battery));
+    if (!latestSnapshot || !readings.size) return;
+
+    let changed = false;
+    const devices = latestSnapshot.devices.map((device) => {
+      const battery = readings.get(device.serial);
+      if (!battery || sameBattery(device.battery, battery)) return device;
+      changed = true;
+      return { ...device, battery };
+    });
+    if (changed) {
+      sendSnapshot({ ...latestSnapshot, devices, refreshedAt: new Date().toISOString() });
+    }
+  } finally {
+    batteryPollRunning = false;
   }
 }
 
 function rememberFromSnapshot(endpoint, snapshot, fallback = {}) {
   const device = snapshot.devices.find((item) => item.connection === "wifi" && item.serial === endpoint);
   const service = snapshot.services.find((item) => item.endpoint === endpoint);
-  const metadata = device
-    ? metadataFor(device, service, fallback.mode || "legacy")
+  const detected = device ? metadataFor(device, service, fallback.mode || "legacy") : null;
+  const metadata = detected
+    ? {
+        ...detected,
+        label: detected.label || fallback.label || null,
+        hardwareSerial: detected.hardwareSerial || fallback.hardwareSerial || null,
+        mdnsServiceName: detected.mdnsServiceName || fallback.mdnsServiceName || null,
+      }
     : {
         label: fallback.label || null,
         hardwareSerial: fallback.hardwareSerial || null,
@@ -343,7 +394,7 @@ function registerIpc() {
     const snapshot = await adbService.snapshot();
     rememberFromSnapshot(result.endpoint, snapshot, {
       label: usbDevice ? metadataFor(usbDevice).label : null,
-      hardwareSerial: usbDevice?.hardwareSerial || serial,
+      hardwareSerial: result.hardwareSerial || usbDevice?.hardwareSerial || serial,
       mode: "legacy",
     });
     sendSnapshot(snapshot);
@@ -445,6 +496,7 @@ app.whenReady().then(() => {
   createWindow();
   pollTimer = setInterval(pollDevices, FALLBACK_POLL_INTERVAL_MS);
   deviceProbeTimer = setInterval(probeDeviceTransports, DEVICE_PROBE_INTERVAL_MS);
+  batteryPollTimer = setInterval(pollBatteries, BATTERY_POLL_INTERVAL_MS);
   pollDevices();
   void probeDeviceTransports();
   void startDeviceTracker();
@@ -452,6 +504,7 @@ app.whenReady().then(() => {
   powerMonitor.on("resume", () => {
     reconnectManager.wake();
     pollDevices();
+    void pollBatteries();
   });
 
   app.on("activate", () => {
@@ -467,6 +520,7 @@ app.on("before-quit", () => {
   shuttingDown = true;
   if (pollTimer) clearInterval(pollTimer);
   if (deviceProbeTimer) clearInterval(deviceProbeTimer);
+  if (batteryPollTimer) clearInterval(batteryPollTimer);
   stopDeviceTracker();
   pairingController?.abort();
 });

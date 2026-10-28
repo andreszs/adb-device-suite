@@ -4,6 +4,26 @@ All notable changes to ADB Device Suite will be documented in this file.
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-10-28
+
+### Added
+
+- Connected devices now refresh battery level and charging state every five seconds while the application is visible.
+- Device cards highlight batteries at or below Android's 15% low-battery threshold and show the remaining percentage on hover.
+- Charging cards use a mint battery-level background with an optional electric-green activity sweep.
+
+### Changed
+
+- Battery readings are collected independently from cached device metadata for faster charging-state updates.
+- Battery icons are green only while Android reports active charging; full and non-charging batteries remain gray.
+- Battery polling pauses while the window is hidden or minimized and resumes immediately when it regains focus.
+
+### Fixed
+
+- Use over Wi-Fi now reports success only after ADB verifies the network transport as connected.
+- Older Android devices with CRCRLF-formatted `getprop` output are parsed correctly and group their USB and Wi-Fi transports into one device card.
+- Temporary metadata failures are retried instead of being cached as incomplete device identities.
+
 ## [0.1.3] - 2026-10-26
 
 ### Added

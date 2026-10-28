@@ -222,9 +222,8 @@ function BatteryIndicator({ battery }: { battery: NonNullable<AdbDevice["battery
   const { t } = useTranslation();
   const level = battery.level === null ? 0 : Math.max(0, Math.min(100, battery.level));
   const charging = battery.status === "charging";
-  const status = t(`deviceInfo.batteryStatus.${battery.status}`);
-  const tooltip = `${level}% · ${status}`;
-  const tone = battery.status === "charging" || battery.status === "full" ? "charging" : level <= 20 ? "low" : "";
+  const tooltip = t("deviceInfo.remaining", { level });
+  const tone = charging ? "charging" : "";
   const BatteryIcon = charging
     ? level <= 20 ? MdBatteryCharging20
       : level <= 30 ? MdBatteryCharging30
@@ -294,6 +293,7 @@ function DeviceCard({
   const batteryStyle = hasBattery
     ? ({ "--battery-level": `${batteryLevel}%` } as CSSProperties)
     : undefined;
+  const lowBattery = hasBattery && batteryLevel <= 15 && !charging;
   const [editingAlias, setEditingAlias] = useState(false);
   const [aliasDraft, setAliasDraft] = useState(alias || "");
 
@@ -312,7 +312,7 @@ function DeviceCard({
   }
 
   return (
-    <article className={`device-card${hasBattery ? " has-battery" : ""}${charging ? " is-charging" : ""}${charging && chargingAnimation ? " animate-charging" : ""}`} style={batteryStyle}>
+    <article className={`device-card${hasBattery ? " has-battery" : ""}${lowBattery ? " is-low-battery" : ""}${charging ? " is-charging" : ""}${charging && chargingAnimation ? " animate-charging" : ""}`} style={batteryStyle}>
       {charging && chargingAnimation && (
         <span aria-hidden="true" className="charging-effects">
           <i className="charge-sheen" />

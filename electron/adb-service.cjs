@@ -38,7 +38,7 @@ function parseDevices(output) {
 function parseProperties(output) {
   const properties = {};
   for (const line of output.split(/\r?\n/)) {
-    const match = line.match(/^\[([^\]]+)]\s*:\s*\[(.*)]$/);
+    const match = line.trim().match(/^\[([^\]]+)]\s*:\s*\[(.*)]$/);
     if (match) properties[match[1]] = match[2];
   }
   return properties;
@@ -78,6 +78,12 @@ function parseBatteryInfo(output) {
     technology: values.technology || null,
     sources,
   };
+}
+
+function validateSerial(rawSerial) {
+  const serial = typeof rawSerial === "string" ? rawSerial.trim() : "";
+  if (!serial || serial.length > 300 || /[\u0000-\u001f\s]/.test(serial)) throw new Error("Invalid device.");
+  return serial;
 }
 
 function parseScreenInfo(sizeOutput, densityOutput) {
@@ -283,6 +289,8 @@ class AdbService {
     this.adbPath = null;
     this.adbVersion = null;
     this.metadataCache = new Map();
+    this.batteryCache = new Map();
+    this.batteryRequests = new Map();
   }
 
   setCustomPath(customPath) {
@@ -290,6 +298,8 @@ class AdbService {
     this.adbPath = null;
     this.adbVersion = null;
     this.metadataCache.clear();
+    this.batteryCache.clear();
+    this.batteryRequests.clear();
   }
 
   #candidates() {
@@ -363,18 +373,16 @@ class AdbService {
     const cached = this.metadataCache.get(device.serial);
     if (cached && Date.now() - cached.at < 30_000) return cached.value;
 
-    const [propertiesResult, routeResult, addressesResult, batteryResult] = await Promise.allSettled([
+    const [propertiesResult, routeResult, addressesResult] = await Promise.allSettled([
       this.run(["-s", device.serial, "shell", "getprop"], 7_000),
       this.run(["-s", device.serial, "shell", "ip", "route"], 7_000),
       this.run(["-s", device.serial, "shell", "ip", "-o", "-4", "addr", "show"], 7_000),
-      this.run(["-s", device.serial, "shell", "dumpsys", "battery"], 7_000),
     ]);
     const properties = propertiesResult.status === "fulfilled"
       ? parseProperties(propertiesResult.value.stdout)
       : {};
     const routeOutput = routeResult.status === "fulfilled" ? routeResult.value.stdout : "";
     const addressesOutput = addressesResult.status === "fulfilled" ? addressesResult.value.stdout : "";
-    const battery = batteryResult.status === "fulfilled" ? parseBatteryInfo(batteryResult.value.stdout) : null;
     const detectedAddresses = parseIpAddresses(addressesOutput, routeOutput);
     const connectedAddress = device.connection === "wifi"
       ? device.serial.match(/^(\d{1,3}(?:\.\d{1,3}){3}):\d+$/)?.[1] || null
@@ -389,10 +397,27 @@ class AdbService {
       hardwareSerial: properties["ro.serialno"] || properties["ro.boot.serialno"] || null,
       ipAddress,
       ipAddresses,
-      battery,
     };
-    this.metadataCache.set(device.serial, { at: Date.now(), value });
+    if (propertiesResult.status === "fulfilled" && Object.keys(properties).length > 0) {
+      this.metadataCache.set(device.serial, { at: Date.now(), value });
+    }
     return value;
+  }
+
+  async battery(rawSerial) {
+    const serial = validateSerial(rawSerial);
+    const pending = this.batteryRequests.get(serial);
+    if (pending) return pending;
+
+    const request = this.run(["-s", serial, "shell", "dumpsys", "battery"], 4_000)
+      .then(({ stdout }) => {
+        const battery = parseBatteryInfo(stdout);
+        this.batteryCache.set(serial, battery);
+        return battery;
+      })
+      .finally(() => this.batteryRequests.delete(serial));
+    this.batteryRequests.set(serial, request);
+    return request;
   }
 
   async snapshot() {
@@ -403,10 +428,15 @@ class AdbService {
         this.run(["mdns", "services"], 5_000).catch(() => ({ stdout: "" })),
       ]);
       const devices = parseDevices(devicesOutput);
-      const enriched = await Promise.all(devices.map(async (device) => ({
-        ...device,
-        ...(await this.#deviceMetadata(device)),
-      })));
+      const enriched = await Promise.all(devices.map(async (device) => {
+        const [metadata, battery] = await Promise.all([
+          this.#deviceMetadata(device),
+          device.state === "device"
+            ? this.battery(device.serial).catch(() => this.batteryCache.get(device.serial) || null)
+            : null,
+        ]);
+        return { ...device, ...metadata, ...(battery ? { battery } : {}) };
+      }));
       return {
         adb: {
           available: true,
@@ -434,8 +464,7 @@ class AdbService {
   }
 
   async deviceInfo(rawSerial) {
-    const serial = typeof rawSerial === "string" ? rawSerial.trim() : "";
-    if (!serial || serial.length > 300 || /[\u0000-\u001f\s]/.test(serial)) throw new Error("Invalid device.");
+    const serial = validateSerial(rawSerial);
     const { stdout: state } = await this.run(["-s", serial, "get-state"], 5_000);
     if (state.trim() !== "device") throw new Error("The device is not connected or authorized.");
 
@@ -540,13 +569,27 @@ class AdbService {
     };
   }
 
-  async connect(rawEndpoint) {
+  async connect(rawEndpoint, options = {}) {
     const endpoint = validateEndpoint(rawEndpoint);
     const { stdout, stderr } = await this.run(["connect", endpoint], 15_000);
     const output = stdout || stderr;
     if (/failed|cannot|unable|refused|timed out/i.test(output)) throw new Error(output);
     this.metadataCache.delete(endpoint);
-    return { endpoint, message: output || `Connected to ${endpoint}` };
+    const verificationDelays = options.verificationDelays || [0, 250, 500, 750, 1_000, 1_500];
+    let lastState = "";
+    for (const delay of verificationDelays) {
+      if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+      try {
+        const { stdout: state } = await this.run(["-s", endpoint, "get-state"], 3_000);
+        lastState = state.trim();
+        if (lastState === "device") {
+          return { endpoint, verified: true, message: output || `Connected to ${endpoint}` };
+        }
+      } catch (error) {
+        lastState = error instanceof Error ? error.message : String(error);
+      }
+    }
+    throw new Error(`ADB enabled the network transport, but could not verify ${endpoint} as connected${lastState ? ` (${lastState})` : ""}.`);
   }
 
   async disconnect(rawEndpoint) {
@@ -633,7 +676,7 @@ class AdbService {
     };
   }
 
-  async enableWireless(serial) {
+  async enableWireless(serial, options = {}) {
     if (typeof serial !== "string" || !serial.trim()) throw new Error("Invalid device.");
     const current = await this.snapshot();
     const device = current.devices.find((item) => item.serial === serial && item.connection === "usb");
@@ -645,11 +688,25 @@ class AdbService {
     if (!candidates.length) throw new Error("Could not determine a reachable device network address.");
 
     await this.run(["-s", serial, "tcpip", "5555"], 15_000);
-    await new Promise((resolve) => setTimeout(resolve, 900));
+    await new Promise((resolve) => setTimeout(resolve, options.restartDelay ?? 900));
     const failures = [];
     for (const address of candidates) {
       try {
-        return await this.connect(`${address}:5555`);
+        const result = await this.connect(`${address}:5555`, options.connectOptions);
+        const endpoint = result.endpoint;
+        this.metadataCache.set(endpoint, {
+          at: Date.now(),
+          value: {
+            manufacturer: device.manufacturer || null,
+            model: device.model || null,
+            androidVersion: device.androidVersion || null,
+            sdk: device.sdk || null,
+            hardwareSerial: device.hardwareSerial || serial,
+            ipAddress: address,
+            ipAddresses: [...new Set([address, ...candidates])],
+          },
+        });
+        return { ...result, hardwareSerial: device.hardwareSerial || serial };
       } catch (error) {
         failures.push(`${address}: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -661,6 +718,8 @@ class AdbService {
     await this.run(["kill-server"], 8_000).catch(() => null);
     const { stdout, stderr } = await this.run(["start-server"], 12_000);
     this.metadataCache.clear();
+    this.batteryCache.clear();
+    this.batteryRequests.clear();
     return { message: stdout || stderr || "ADB server restarted." };
   }
 }
@@ -680,4 +739,5 @@ module.exports = {
   parseStorageInfo,
   parseSettingBoolean,
   validateEndpoint,
+  validateSerial,
 };

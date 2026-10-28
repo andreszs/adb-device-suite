@@ -33,8 +33,9 @@
   --card-b: rgba(248, 250, 254, 0.98);
   --card-hover: rgba(71, 98, 154, 0.28);
   --battery-fill: rgba(105, 122, 148, 0.08);
-  --charge-fill: #eef6f2;
-  --charge-effect-highlight: rgba(255, 255, 255, 0.68);
+  --battery-low-fill: #fdecef;
+  --charge-fill: #ddf5e7;
+  --charge-effect-highlight: rgba(20, 235, 133, 0.92);
   --device-icon: #526fdf;
   --device-icon-a: rgba(82, 111, 223, 0.13);
   --device-icon-b: rgba(82, 111, 223, 0.04);
@@ -99,8 +100,9 @@
   --card-b: rgba(14, 21, 36, 0.96);
   --card-hover: rgba(122, 145, 210, 0.25);
   --battery-fill: rgba(150, 169, 202, 0.10);
+  --battery-low-fill: #422029;
   --charge-fill: #19342f;
-  --charge-effect-highlight: rgba(226, 247, 255, 0.54);
+  --charge-effect-highlight: rgba(48, 255, 157, 0.88);
   --device-icon: #8aa1fb;
   --device-icon-a: rgba(105, 133, 255, 0.14);
   --device-icon-b: rgba(105, 133, 255, 0.04);
@@ -211,6 +213,7 @@ h1, h2, h3, p { margin-top: 0; }
 .device-card > * { position: relative; z-index: 1; }
 .device-card.has-battery::before { position: absolute; inset: 0 auto 0 0; width: var(--battery-level, 0%); pointer-events: none; content: ""; }
 .device-card.has-battery::before { z-index: -2; background: var(--battery-fill); }
+.device-card.is-low-battery::before { background: var(--battery-low-fill); }
 .device-card.is-charging::before { background: var(--charge-fill); }
 .device-card > .charging-effects { position: absolute; inset: 0 auto 0 0; z-index: 0; width: var(--battery-level, 0%); overflow: hidden; pointer-events: none; }
 .charging-effects i { position: absolute; display: block; pointer-events: none; }

@@ -182,8 +182,10 @@ declare global {
 
   interface ActionResult {
     endpoint?: string;
+    hardwareSerial?: string;
     message: string;
     pendingConnection?: boolean;
+    verified?: boolean;
     settings?: AppSettings;
   }
 }

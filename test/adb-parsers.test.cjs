@@ -15,6 +15,7 @@ const {
   parseStorageInfo,
   parseSettingBoolean,
   validateEndpoint,
+  validateSerial,
 } = require("../electron/adb-service.cjs");
 
 test("parseDevices identifies USB, Wi-Fi and unauthorized devices", () => {
@@ -39,11 +40,12 @@ ZX1G22 unauthorized usb:1-2 transport_id:3
 });
 
 test("parseProperties reads Android getprop output", () => {
-  const properties = parseProperties(`[ro.build.version.release]: [16]
-[ro.build.version.sdk]: [36]
+  const properties = parseProperties(`[ro.build.version.release]: [16]\r\r
+[ro.build.version.sdk]: [36]\r\r
 [ro.product.manufacturer]: [Google]
 [ro.product.model]: [Pixel 9]
 `);
+  assert.equal(properties["ro.build.version.release"], "16");
   assert.equal(properties["ro.product.model"], "Pixel 9");
   assert.equal(properties["ro.build.version.sdk"], "36");
 });
@@ -134,6 +136,83 @@ test("validateEndpoint normalizes safe endpoints and rejects invalid ports", () 
   assert.equal(validateEndpoint("adb-device.local:37123"), "adb-device.local:37123");
   assert.throws(() => validateEndpoint("192.168.1.2"), /format/);
   assert.throws(() => validateEndpoint("192.168.1.2:99999"), /between/);
+});
+
+test("battery readings bypass the static metadata cache and deduplicate concurrent requests", async () => {
+  const adb = new AdbService();
+  let calls = 0;
+  adb.run = async (args) => {
+    assert.deepEqual(args, ["-s", "192.168.1.2:5555", "shell", "dumpsys", "battery"]);
+    calls += 1;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    return { stdout: "level: 73\nstatus: 2\nusb powered: true", stderr: "" };
+  };
+
+  const [first, concurrent] = await Promise.all([
+    adb.battery("192.168.1.2:5555"),
+    adb.battery("192.168.1.2:5555"),
+  ]);
+  const next = await adb.battery("192.168.1.2:5555");
+
+  assert.deepEqual(first, concurrent);
+  assert.equal(next.level, 73);
+  assert.equal(next.status, "charging");
+  assert.deepEqual(next.sources, ["USB"]);
+  assert.equal(calls, 2);
+});
+
+test("validateSerial rejects whitespace and control characters", () => {
+  assert.equal(validateSerial(" 192.168.1.2:5555 "), "192.168.1.2:5555");
+  assert.throws(() => validateSerial("device name"), /Invalid device/);
+  assert.throws(() => validateSerial("device\nname"), /Invalid device/);
+});
+
+test("connect only succeeds after ADB verifies the endpoint is a device", async () => {
+  const adb = new AdbService();
+  let checks = 0;
+  adb.run = async (args) => {
+    if (args[0] === "connect") return { stdout: "connected to 192.168.1.2:5555", stderr: "" };
+    checks += 1;
+    return { stdout: checks === 1 ? "offline" : "device", stderr: "" };
+  };
+
+  const result = await adb.connect("192.168.1.2:5555", { verificationDelays: [0, 0] });
+
+  assert.equal(result.verified, true);
+  assert.equal(checks, 2);
+});
+
+test("connect rejects an unverified success response", async () => {
+  const adb = new AdbService();
+  adb.run = async (args) => args[0] === "connect"
+    ? { stdout: "connected to 192.168.1.2:5555", stderr: "" }
+    : { stdout: "offline", stderr: "" };
+
+  await assert.rejects(
+    adb.connect("192.168.1.2:5555", { verificationDelays: [0] }),
+    /could not verify .* as connected/i,
+  );
+});
+
+test("incomplete device metadata is retried instead of cached", async () => {
+  const adb = new AdbService();
+  let getpropCalls = 0;
+  adb.locate = async () => "adb";
+  adb.run = async (args) => {
+    if (args[0] === "devices") return { stdout: "List of devices attached\nSERIAL device model:Test", stderr: "" };
+    if (args[0] === "mdns") return { stdout: "", stderr: "" };
+    if (args.includes("getprop")) {
+      getpropCalls += 1;
+      throw new Error("transport restarting");
+    }
+    if (args.includes("battery")) return { stdout: "level: 50\nstatus: 3", stderr: "" };
+    return { stdout: "", stderr: "" };
+  };
+
+  await adb.snapshot();
+  await adb.snapshot();
+
+  assert.equal(getpropCalls, 2);
 });
 
 test("pairing by code accepts a device that ADB already auto-connected", async () => {
