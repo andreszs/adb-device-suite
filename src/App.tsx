@@ -1315,15 +1315,16 @@ export default function App() {
   }
 
   const isEmpty = deviceGroups.length === 0;
+  const initializing = loading && snapshot.refreshedAt === EMPTY_SNAPSHOT.refreshedAt;
   const statusKind = busy ? "busy" : toast?.type || (availableUpdate ? "update" : "idle");
   const statusMessage = busy
     ? busyMessage(busy, t)
-    : toast?.message || (availableUpdate ? t("status.updateAvailable", { version: availableUpdate.latestVersion }) : null) || (loading ? t("status.refreshing") : snapshot.adb.available ? t("status.ready") : t("status.adbRequired"));
+    : toast?.message || (availableUpdate ? t("status.updateAvailable", { version: availableUpdate.latestVersion }) : null) || (initializing ? t("setup.detectingTitle") : loading ? t("status.refreshing") : snapshot.adb.available ? t("status.ready") : t("status.adbRequired"));
 
   return (
     <div
-      aria-busy={busy !== null && !busy.startsWith("modal:")}
-      className={`app-shell${busy !== null && !busy.startsWith("modal:") ? " is-busy" : ""}`}
+      aria-busy={initializing || (busy !== null && !busy.startsWith("modal:"))}
+      className={`app-shell${initializing || (busy !== null && !busy.startsWith("modal:")) ? " is-busy" : ""}`}
     >
       <header className="topbar">
         <div className="brand">
@@ -1353,13 +1354,19 @@ export default function App() {
                 ? <Icons.DarkMode />
                 : <Icons.AutoTheme />}
           </button>
-          <button className="button text has-icon" disabled={busy !== null} onClick={() => openModal("connect")} title={t("header.connectTooltip")}><Icons.Link /> {t("common.connect")}</button>
-          <button className="button primary has-icon" disabled={busy !== null} onClick={() => openModal("pair")} title={t("header.pairTooltip")}><Icons.Wifi /> {t("header.pair")}</button>
+          <button className="button text has-icon" disabled={initializing || busy !== null} onClick={() => openModal("connect")} title={t("header.connectTooltip")}><Icons.Link /> {t("common.connect")}</button>
+          <button className="button primary has-icon" disabled={initializing || busy !== null} onClick={() => openModal("pair")} title={t("header.pairTooltip")}><Icons.Wifi /> {t("header.pair")}</button>
         </div>
       </header>
 
       <main>
-        {!snapshot.adb.available ? (
+        {initializing ? (
+          <section aria-live="polite" className="startup-panel" role="status">
+            <span aria-hidden="true" className="startup-spinner" />
+            <h2>{t("setup.detectingTitle")}</h2>
+            <p>{t("setup.detectingDescription")}</p>
+          </section>
+        ) : !snapshot.adb.available ? (
           <>
             <section className="setup-toolbar">
               <AdbControls adb={snapshot.adb} loading={loading} onRefresh={refresh} onSettings={() => setSettingsOpen(true)} />
@@ -1523,7 +1530,7 @@ export default function App() {
         </a>
       </footer>
 
-      {busy && !busy.startsWith("modal:") && (
+      {(initializing || (busy && !busy.startsWith("modal:"))) && (
         <div aria-hidden="true" className="busy-layer" />
       )}
 

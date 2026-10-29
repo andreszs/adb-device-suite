@@ -4,6 +4,8 @@ All notable changes to ADB Device Suite will be documented in this file.
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-10-28
+
 ### Changed
 
 - Connected devices and saved connections are sorted naturally by device name, case-insensitively.
@@ -11,13 +13,14 @@ All notable changes to ADB Device Suite will be documented in this file.
 ### Fixed
 
 - USB and Wi-Fi transports remain grouped when USB metadata is temporarily unavailable but its ADB serial matches the device hardware serial.
+- Startup now shows a blocking ADB detection state instead of briefly presenting the missing-ADB setup actions before automatic discovery completes.
 
 ## [0.1.5] - 2026-10-28
 
 ### Fixed
 
 - Saved devices reconnect through their current mDNS endpoint first and fall back to the last valid IP address.
-- TLS service names are no longer treated as manual `IP:port` endpoints, and affected saved records migrate automatically after discovery.
+- Saved connections discovered through mDNS no longer retain invalid service names as manual addresses, and affected settings repair automatically.
 - The latest status-bar error remains visible instead of disappearing after five seconds.
 
 ### Added
@@ -43,7 +46,7 @@ All notable changes to ADB Device Suite will be documented in this file.
 
 ### Changed
 
-- Battery readings are collected independently from cached device metadata for faster charging-state updates.
+- Battery and charging-state updates no longer wait on cached device metadata.
 - Battery icons are green only while Android reports active charging; full and non-charging batteries remain gray.
 - Battery polling pauses while the window is hidden or minimized and resumes immediately when it regains focus.
 
@@ -67,7 +70,6 @@ All notable changes to ADB Device Suite will be documented in this file.
 - Device cards use clearer typography, compact battery indicators and borderless action buttons with hover feedback.
 - Settings focuses on global reconnection, charging animation, language and ADB executable preferences; saved devices remain managed from the main window.
 - The main content scrolls independently while the native-style status bar remains fixed and visible.
-- The README now includes concise features, a table of contents, repository badges and updated application screenshots.
 
 ### Fixed
 
@@ -88,7 +90,7 @@ All notable changes to ADB Device Suite will be documented in this file.
 
 - A second pairing operation can no longer start while another pairing or post-pairing connection is still in progress.
 - Pairing-code users are no longer returned to an actionable Nearby pairing entry while ADB is still establishing the final connection.
-- Abort listeners used while polling mDNS are released after each completed delay instead of accumulating during longer pairing attempts.
+- Longer pairing attempts no longer accumulate obsolete background polling listeners.
 
 ## [0.1.1] - 2026-10-25
 
@@ -116,7 +118,7 @@ All notable changes to ADB Device Suite will be documented in this file.
 
 ### Added
 
-- Initial Electron and React desktop application.
+- Initial cross-platform desktop application.
 - Automatic ADB discovery on Windows and macOS.
 - USB and Wi-Fi device listing with Android metadata.
 - Android 11+ pairing-code workflow and mDNS discovery.
@@ -150,8 +152,7 @@ All notable changes to ADB Device Suite will be documented in this file.
 - The footer is now a legible, flat native-style status bar with platform typography for Windows and macOS.
 - Blocking ADB actions now display an operation indicator, prevent duplicate interaction, and use the native wait cursor across the window.
 - The two-panel status bar now carries ready, progress, success, and error messages alongside the persistent GitHub link.
-- A compact status-bar panel displays the running application version reported by Electron.
+- A compact status-bar panel displays the installed application version.
 - Clicking the version panel checks the latest published GitHub release and exposes a download link when an update is available.
-- Local release packaging for Windows and macOS.
-- Microsoft Store AppX packaging with the reserved Partner Center identity and Store-managed signing.
-- Store builds exclude renderer dependencies already bundled by Vite and retain only supported Chromium locales, substantially reducing download and installed size.
+- Installable packages for Windows and macOS.
+- Microsoft Store packages omit redundant application resources, substantially reducing download and installed size.
