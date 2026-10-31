@@ -4,6 +4,10 @@
 
 **Manage Android devices without the terminal.**
 
+<a href="https://apps.microsoft.com/detail/9NWW56PZ06CP?referrer=appbadge&amp;mode=full" target="_blank" rel="noopener noreferrer">
+  <img src="https://get.microsoft.com/images/en-us%20dark.svg" width="200" alt="Get it from Microsoft Store">
+</a>
+
 ADB Device Suite is a local-first desktop application for discovering, pairing, connecting and reconnecting Android devices over ADB. It is designed for developers who want the convenience of Android Studio's device connection tools without keeping an IDE or terminal open.
 
 > [!NOTE]
